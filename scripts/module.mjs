@@ -204,12 +204,26 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
     return this;
   }
 
+  /**
+   * Set after an error so a broken mask disables itself instead of halting the canvas render loop.
+   * @type {boolean}
+   */
+  #failed = false;
+
   /** @override */
   render(renderer) {
-    this.renderable = state.enabled && state.neverFog && !!canvas.scene;
+    this.renderable = !this.#failed && state.enabled && state.neverFog && !!canvas.scene;
     if ( !this.renderable ) return;
-    this.#refreshBackground();
-    this.#refreshRoofs();
+    try {
+      this.#refreshBackground();
+      this.#refreshRoofs();
+    } catch(err) {
+      this.#failed = true;
+      this.renderable = false;
+      console.error(`${MODULE_ID} | Never Fog mask failed and has been disabled until reload`, err);
+      ui.notifications?.error("Fog Shading: Never Fog failed and was disabled. See console (F12) for details.");
+      return;
+    }
     super.render(renderer);
   }
 
@@ -218,7 +232,8 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
    */
   #refreshBackground() {
     const rect = canvas.dimensions.sceneRect;
-    if ( this.#sceneRect?.equals(rect) ) return;
+    const r = this.#sceneRect;
+    if ( r && (r.x === rect.x) && (r.y === rect.y) && (r.width === rect.width) && (r.height === rect.height) ) return;
     this.#sceneRect = rect.clone();
     this.background.clear().beginFill(0xFFFFFF, 1).drawShape(rect).endFill();
   }
