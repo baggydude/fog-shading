@@ -15,17 +15,32 @@ const state = {
   exploredTint: [0, 0, 0],
   exploredTintStrength: 0.0,
   sceneDarknessInfluence: 0.5,
-  useFogImage: false
+  useFogImage: false,
+  revealMode: "off",
+  revealedDarkness: 0.2,
+  revealedSaturation: 0.85
 };
 
 /* -------------------------------------------- */
 /*  Settings                                    */
 /* -------------------------------------------- */
 
-const {BooleanField, NumberField, ColorField} = foundry.data.fields;
+const {BooleanField, NumberField, ColorField, StringField} = foundry.data.fields;
 
 const slider = initial => new NumberField({required: true, nullable: false, min: 0, max: 1, step: 0.01, initial});
 const color = initial => new ColorField({required: true, nullable: false, initial});
+
+/**
+ * Which areas are never drawn as fog.
+ * - off: normal fog everywhere
+ * - roofs: building footprints whose roof is currently showing
+ * - outdoors: everything except the footprints of buildings whose roof is currently hidden (i.e. you're inside)
+ */
+const REVEAL_MODES = {
+  off: "FOGSHADING.RevealMode.Off",
+  roofs: "FOGSHADING.RevealMode.Roofs",
+  outdoors: "FOGSHADING.RevealMode.Outdoors"
+};
 
 const SETTINGS = {
   enabled: {key: "Enabled", type: () => new BooleanField({initial: true})},
@@ -38,7 +53,11 @@ const SETTINGS = {
   exploredTint: {key: "ExploredTint", type: () => color("#1a2233"), isColor: true},
   exploredTintStrength: {key: "ExploredTintStrength", type: () => slider(0.0)},
   sceneDarknessInfluence: {key: "SceneDarknessInfluence", type: () => slider(0.5)},
-  useFogImage: {key: "UseFogImage", type: () => new BooleanField({initial: false})}
+  useFogImage: {key: "UseFogImage", type: () => new BooleanField({initial: false})},
+  revealMode: {key: "RevealMode", isString: true,
+    type: () => new StringField({required: true, blank: false, initial: "off", choices: REVEAL_MODES})},
+  revealedDarkness: {key: "RevealedDarkness", type: () => slider(0.2)},
+  revealedSaturation: {key: "RevealedSaturation", type: () => slider(0.85)}
 };
 
 function registerSettings() {
@@ -109,7 +128,7 @@ function injectSceneConfig(app, element) {
     if ( isColor ) value = foundry.utils.Color.from(value).css;
     body.append(type().toFormGroup(
       {label: loc(`FOGSHADING.${key}.Name`), hint: loc(`FOGSHADING.${key}.Hint`)},
-      {name: `flags.${MODULE_ID}.${name}`, value}
+      {name: `flags.${MODULE_ID}.${name}`, value, localize: true}
     ));
   }
   fieldset.append(body);
@@ -138,14 +157,97 @@ function injectSceneConfig(app, element) {
  */
 function readValues(fieldset) {
   const values = {};
-  for ( const [name, {isColor}] of Object.entries(SETTINGS) ) {
+  for ( const [name, {isColor, isString}] of Object.entries(SETTINGS) ) {
     const input = fieldset.querySelector(`[name="flags.${MODULE_ID}.${name}"]`);
     if ( !input ) continue;
     if ( input.type === "checkbox" ) values[name] = input.checked;
-    else if ( isColor ) values[name] = input.value || undefined;
+    else if ( isColor || isString ) values[name] = input.value || undefined;
     else values[name] = Number(input.value);
   }
   return values;
+}
+
+/* -------------------------------------------- */
+/*  Reveal Mask                                 */
+/* -------------------------------------------- */
+
+/**
+ * Screen-space mask (red channel) of areas that are never drawn as fog, built from Define Surface regions and
+ * core's per-client occlusion state. Lives in the hidden canvas group alongside core's vision/occlusion masks so
+ * it shares their world-to-screen transform and renders before the visibility filter samples it.
+ *
+ * Building footprints are regions with an occluding or exposed surface above the viewed Level's floor. A
+ * footprint is removed from the mask while it is occluded (roof faded, e.g. your token is inside), so hiding a
+ * roof can only ever return an area to normal fog, never reveal more.
+ */
+class RevealMask extends foundry.canvas.containers.CachedContainer {
+  constructor() {
+    super();
+    this.shapes = this.addChild(new PIXI.LegacyGraphics());
+  }
+
+  /** @override */
+  static textureConfiguration = {
+    scaleMode: PIXI.SCALE_MODES.LINEAR,
+    format: PIXI.FORMATS.RGBA,
+    multisample: PIXI.MSAA_QUALITY.NONE
+  };
+
+  /** @override */
+  clearColor = [0, 0, 0, 0];
+
+  /**
+   * Signature of the inputs the current shapes were drawn from.
+   * @type {string|null}
+   */
+  #key = null;
+
+  /** @type {readonly object[]|null} */
+  #surfaces = null;
+
+  /** @override */
+  clear() {
+    this.shapes.clear();
+    this.#key = null;
+    this.#surfaces = null;
+    return this;
+  }
+
+  /** @override */
+  render(renderer) {
+    this.renderable = (state.enabled && (state.revealMode !== "off") && !!canvas.level);
+    if ( !this.renderable ) return;
+    this.#refreshShapes();
+    super.render(renderer);
+  }
+
+  /**
+   * Rebuild the mask geometry if the mode, level, surfaces or occluded surfaces changed.
+   */
+  #refreshShapes() {
+    const level = canvas.level;
+    const surfaces = canvas.scene.getSurfaces({level: level.id});
+    const occluded = canvas.masks.occlusion.occludedSurfaces;
+    const key = `${state.revealMode}|${level.id}|${[...occluded].map(s => s.key).join(";")}`;
+    if ( (key === this.#key) && (surfaces === this.#surfaces) ) return;
+    this.#key = key;
+    this.#surfaces = surfaces;
+
+    const g = this.shapes.clear();
+    const floor = level.elevation.base;
+    const footprints = surfaces.filter(s => (s.occlusion || s.exposure) && (s.elevation > floor));
+
+    // Revealed area: the whole scene (outdoors) or just the building footprints (roofs)
+    g.beginFill(0xFFFFFF, 1);
+    if ( state.revealMode === "outdoors" ) g.drawShape(canvas.dimensions.sceneRect);
+    else for ( const s of footprints ) s.region.polygonTree.drawShape(g);
+    g.endFill();
+
+    // Punch out buildings whose roof is currently hidden, restoring normal fog inside them
+    g.beginFill(0x000000, 1);
+    for ( const s of occluded ) s.region.polygonTree.drawShape(g);
+    g.endFill();
+  }
 }
 
 /* -------------------------------------------- */
@@ -173,7 +275,10 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
       fsUnexplored: [0.85, 0, 0],         // darkness, saturation, tint strength
       fsUnexploredTint: [0, 0, 0],
       fsExplored: [0.55, 0.35, 0],
-      fsExploredTint: [0, 0, 0]
+      fsExploredTint: [0, 0, 0],
+      fsReveal: false,
+      fsRevealed: [0.2, 0.85, 0],
+      fsRevealTexture: PIXI.Texture.WHITE
     };
   }
 
@@ -201,6 +306,9 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
     uniform vec3 fsUnexploredTint;
     uniform vec3 fsExplored;
     uniform vec3 fsExploredTint;
+    uniform bool fsReveal;
+    uniform vec3 fsRevealed;
+    uniform sampler2D fsRevealTexture;
 
     ${this.CONSTANTS}
     ${this.PERCEIVED_BRIGHTNESS}
@@ -236,8 +344,12 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
       else if ( fsEnabled ) unexplored = vec4(grade(baseColor.rgb, fsUnexplored, fsUnexploredTint), 1.0);
       else unexplored = vec4(unexploredColor, 1.0);
 
+      // Never-fogged areas (roofs / outdoors) are drawn with the "revealed" grade instead of fog
+      float m = fsReveal ? texture2D(fsRevealTexture, vMaskTextureCoord).r : 0.0;
+      vec4 revealed = vec4(grade(baseColor.rgb, fsRevealed, vec3(0.0)), 1.0);
+
       ${persistent ? `
-      gl_FragColor = mix(unexplored, vec4(0.0), r);` : `
+      gl_FragColor = mix(mix(unexplored, revealed, m), vec4(0.0), r);` : `
       // Explored but not currently visible
       vec4 explored;
       if ( fsEnabled ) explored = vec4(grade(baseColor.rgb, fsExplored, fsExploredTint), 1.0);
@@ -246,7 +358,7 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
         explored = vec4(min((exploredColor * reflec) + (baseColor.rgb * exploredColor), vec3(1.0)), 0.5);
       }
 
-      vec4 fow = mix(unexplored, explored, max(r, v));
+      vec4 fow = mix(mix(unexplored, explored, max(r, v)), revealed, m);
       gl_FragColor = mix(fow, vec4(0.0), v);`}
 
       gl_FragColor.rgb *= gl_FragColor.a;
@@ -268,6 +380,11 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
     u.fsExplored[2] = s.exploredTintStrength;
     u.fsUnexploredTint = s.unexploredTint;
     u.fsExploredTint = s.exploredTint;
+    const mask = canvas.masks.fogShadingReveal;
+    u.fsReveal = !!mask?.renderable;
+    u.fsRevealTexture = mask?.renderTexture ?? PIXI.Texture.WHITE;
+    u.fsRevealed[0] = s.revealedDarkness;
+    u.fsRevealed[1] = s.revealedSaturation;
     super.apply(filterManager, input, output, clear);
   }
 }
@@ -285,6 +402,7 @@ Hooks.once("setup", refreshState);
 Hooks.on("canvasInit", () => {
   preview = null;
   refreshState();
+  if ( !canvas.masks.fogShadingReveal ) canvas.hidden.addMask("fogShadingReveal", new RevealMask());
 });
 Hooks.on("updateScene", (scene, changes) => {
   if ( (scene.id === canvas.scene?.id) && foundry.utils.hasProperty(changes, `flags.${MODULE_ID}`) ) refreshState();

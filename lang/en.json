@@ -50,6 +50,21 @@
     "UseFogImage": {
       "Name": "Prefer Fog Images When Set",
       "Hint": "If a Scene or Level has a Fog of War image configured, use it for unexplored areas instead of the shaded map."
+    },
+    "RevealMode": {
+      "Name": "Never Fog",
+      "Hint": "Areas drawn without fog, based on Define Surface regions (Occlusion or Reveal Elevated Surface) above the current floor. A building stops being revealed while its roof is hidden, e.g. your token is inside it. Only the map is revealed: tokens still need line of sight, and fog memory is unaffected.",
+      "Off": "Off (normal fog everywhere)",
+      "Roofs": "Roofs (buildings whose roof is showing)",
+      "Outdoors": "Roofs + Outdoors (everything except the building you're inside)"
+    },
+    "RevealedDarkness": {
+      "Name": "Never Fog: Darkness",
+      "Hint": "How dark never-fogged areas are drawn when outside your line of sight. 0 = full map brightness."
+    },
+    "RevealedSaturation": {
+      "Name": "Never Fog: Saturation",
+      "Hint": "Colour saturation of never-fogged areas outside your line of sight. 0 = greyscale, 1 = original colours."
     }
   }
 }
