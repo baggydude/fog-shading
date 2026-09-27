@@ -159,19 +159,58 @@ function readValues(fieldset) {
 /* -------------------------------------------- */
 
 /**
- * Screen-space mask (red channel) of areas that are never drawn as fog. Lives in the hidden canvas group
- * alongside core's vision/occlusion masks so it renders before the visibility filter samples it.
- *
- * The whole scene is revealed, minus every roof tile that core currently has faded. A roof is any tile with a
- * Fade, Radial or Vision occlusion mode; its cut-out is the tile's own image (alpha), drawn with the tile's
- * transform. Because this keys off the same flag that fades the roof, fog returns beneath a roof at exactly the
- * moment the roof disappears.
+ * Set after a mask error so the Never Fog masks disable themselves instead of halting the canvas render loop.
+ * @type {boolean}
  */
-class RevealMask extends foundry.canvas.containers.CachedContainer {
+let maskFailed = false;
+
+/**
+ * Is the Never Fog mask active for the current scene?
+ * @returns {boolean}
+ */
+function neverFogActive() {
+  return !maskFailed && state.enabled && state.neverFog && !!canvas.scene;
+}
+
+/**
+ * Disable the Never Fog masks after an error, with a notification.
+ * @param {Error} err
+ */
+function failMask(err) {
+  maskFailed = true;
+  console.error(`${MODULE_ID} | Never Fog mask failed and has been disabled until reload`, err);
+  ui.notifications?.error("Fog Shading: Never Fog failed and was disabled. See console (F12) for details.");
+}
+
+/**
+ * Copy a primary mesh's texture, anchor and world placement onto a sprite parented under `container`.
+ * @param {PIXI.Sprite} sprite
+ * @param {PrimarySpriteMesh} mesh
+ * @param {PIXI.Matrix} toLocal    Inverse of the container's world transform
+ */
+function matchMesh(sprite, mesh, toLocal) {
+  sprite.texture = mesh.texture;
+  sprite.anchor.copyFrom(mesh.anchor);
+  sprite.transform.setFromMatrix(toLocal.clone().append(mesh.worldTransform));
+  sprite.visible = true;
+}
+
+/**
+ * Screen-space mask of the areas under faded roofs that should get normal fog: each faded roof's image, trimmed
+ * to the opaque pixels of the viewed Level's background. On an upper floor this keeps the roof overhang (where
+ * the floor image is transparent and you see the ground below) out of the fogged area; on a ground floor whose
+ * background covers the map it is simply the roof image.
+ *
+ * A roof is any tile with a Fade, Radial or Vision occlusion mode, or a Level flagged as a roof level. Rendered
+ * before RevealMask, which subtracts it from the revealed area.
+ */
+class RoofPunchMask extends foundry.canvas.containers.CachedContainer {
   constructor() {
     super();
-    this.background = this.addChild(new PIXI.LegacyGraphics());
     this.roofs = this.addChild(new PIXI.Container());
+    this.floor = this.addChild(new PIXI.Sprite());
+    this.floor.blendMode = PIXI.BLEND_MODES.DST_IN;
+    this.floor.visible = false;
   }
 
   /** @override */
@@ -188,76 +227,70 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
   clearColor = [0, 0, 0, 0];
 
   /**
-   * The scene rect the background was drawn for.
-   * @type {PIXI.Rectangle|null}
+   * How many faded roofs were drawn this frame. RevealMask skips the punch when zero.
+   * @type {number}
    */
-  #sceneRect = null;
+  count = 0;
 
   /** @override */
   clear() {
-    this.background.clear();
-    this.#sceneRect = null;
-    for ( const sprite of this.roofs.children ) {
+    this.count = 0;
+    for ( const sprite of [...this.roofs.children, this.floor] ) {
       sprite.texture = PIXI.Texture.EMPTY;
       sprite.visible = false;
     }
     return this;
   }
 
-  /**
-   * Set after an error so a broken mask disables itself instead of halting the canvas render loop.
-   * @type {boolean}
-   */
-  #failed = false;
-
   /** @override */
   render(renderer) {
-    this.renderable = !this.#failed && state.enabled && state.neverFog && !!canvas.scene;
+    this.count = 0;
+    this.renderable = neverFogActive();
     if ( !this.renderable ) return;
     try {
-      this.#refreshBackground();
-      this.#refreshRoofs();
+      const toLocal = this.worldTransform.clone().invert();
+      this.count = this.#refreshRoofs(toLocal);
+      if ( !this.count ) return;
+      this.#refreshFloor(toLocal);
+      // The stage's transform pass already ran this frame; recompute so sprites match the meshes now
+      this.roofs.updateTransform();
+      this.floor.updateTransform();
     } catch(err) {
-      this.#failed = true;
+      this.count = 0;
       this.renderable = false;
-      console.error(`${MODULE_ID} | Never Fog mask failed and has been disabled until reload`, err);
-      ui.notifications?.error("Fog Shading: Never Fog failed and was disabled. See console (F12) for details.");
+      failMask(err);
       return;
     }
     super.render(renderer);
   }
 
   /**
-   * Fill the scene rect: everything is revealed unless a faded roof says otherwise.
+   * Draw each currently faded roof's image in white.
+   * @param {PIXI.Matrix} toLocal
+   * @returns {number}    The number of faded roofs drawn
    */
-  #refreshBackground() {
-    const rect = canvas.dimensions.sceneRect;
-    const r = this.#sceneRect;
-    if ( r && (r.x === rect.x) && (r.y === rect.y) && (r.width === rect.width) && (r.height === rect.height) ) return;
-    this.#sceneRect = rect.clone();
-    this.background.clear().beginFill(0xFFFFFF, 1).drawShape(rect).endFill();
+  #refreshRoofs(toLocal) {
+    const sprites = this.roofs.children;
+    let i = 0;
+    for ( const mesh of RoofPunchMask.#roofMeshes() ) {
+      if ( !mesh.visible || !RoofPunchMask.#isFadedRoof(mesh) ) continue;
+      const sprite = sprites[i++] ?? this.roofs.addChild(new PIXI.Sprite());
+      matchMesh(sprite, mesh, toLocal);
+    }
+    for ( let j = i; j < sprites.length; j++ ) sprites[j].visible = false;
+    return i;
   }
 
   /**
-   * Draw each currently faded roof tile's image in black, restoring normal fog beneath it.
+   * Trim the drawn roofs to the opaque pixels of the viewed Level's background (DST_IN keeps destination pixels
+   * in proportion to the floor image's alpha). Without a background image, nothing is trimmed.
+   * @param {PIXI.Matrix} toLocal
    */
-  #refreshRoofs() {
-    const sprites = this.roofs.children;
-    const toLocal = this.worldTransform.clone().invert();
-    let i = 0;
-    for ( const mesh of RevealMask.#roofMeshes() ) {
-      if ( !mesh.visible || !RevealMask.#isFadedRoof(mesh) ) continue;
-      const sprite = sprites[i++] ?? this.roofs.addChild(new PIXI.Sprite());
-      sprite.texture = mesh.texture;
-      sprite.anchor.copyFrom(mesh.anchor);
-      sprite.tint = 0x000000;
-      sprite.transform.setFromMatrix(toLocal.clone().append(mesh.worldTransform));
-      sprite.visible = true;
-    }
-    for ( ; i < sprites.length; i++ ) sprites[i].visible = false;
-
-    // The stage's transform pass already ran this frame; recompute so sprites match the roofs now, not next frame
-    this.roofs.updateTransform();
+  #refreshFloor(toLocal) {
+    const index = canvas.level?.index;
+    const mesh = canvas.primary.levelTextures.find(m => m.name === `Level.${index}.background`);
+    if ( mesh?.visible && (mesh.texture !== PIXI.Texture.EMPTY) ) matchMesh(this.floor, mesh, toLocal);
+    else this.floor.visible = false;
   }
 
   /**
@@ -281,9 +314,87 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
    * @returns {boolean}
    */
   static #isFadedRoof(mesh) {
-    if ( !(mesh.occlusionMode & RevealMask.#ROOF_MODES) ) return false;
+    if ( !(mesh.occlusionMode & RoofPunchMask.#ROOF_MODES) ) return false;
     if ( mesh.occluded ) return true;
     return !canvas.masks.occlusion.vision && (mesh._hoverFadeState?.occlusion > 0);
+  }
+}
+
+/**
+ * Screen-space mask (red channel) of areas that are never drawn as fog: the whole scene, minus the areas under
+ * faded roofs from RoofPunchMask. Lives in the hidden canvas group alongside core's vision/occlusion masks so it
+ * renders before the visibility filter samples it.
+ */
+class RevealMask extends foundry.canvas.containers.CachedContainer {
+  constructor() {
+    super();
+    this.background = this.addChild(new PIXI.LegacyGraphics());
+    this.punch = this.addChild(new PIXI.Sprite());
+    this.punch.tint = 0x000000;
+    this.punch.visible = false;
+  }
+
+  /** @override */
+  static textureConfiguration = {
+    scaleMode: PIXI.SCALE_MODES.LINEAR,
+    format: PIXI.FORMATS.RGBA,
+    multisample: PIXI.MSAA_QUALITY.NONE
+  };
+
+  /** @override */
+  clearColor = [0, 0, 0, 0];
+
+  /**
+   * The scene rect the background was drawn for.
+   * @type {PIXI.Rectangle|null}
+   */
+  #sceneRect = null;
+
+  /** @override */
+  clear() {
+    this.background.clear();
+    this.#sceneRect = null;
+    this.punch.texture = PIXI.Texture.EMPTY;
+    this.punch.visible = false;
+    return this;
+  }
+
+  /** @override */
+  render(renderer) {
+    this.renderable = neverFogActive();
+    if ( !this.renderable ) return;
+    try {
+      this.#refreshBackground();
+      this.#refreshPunch();
+    } catch(err) {
+      this.renderable = false;
+      failMask(err);
+      return;
+    }
+    super.render(renderer);
+  }
+
+  /**
+   * Fill the scene rect: everything is revealed unless a faded roof says otherwise.
+   */
+  #refreshBackground() {
+    const rect = canvas.dimensions.sceneRect;
+    const r = this.#sceneRect;
+    if ( r && (r.x === rect.x) && (r.y === rect.y) && (r.width === rect.width) && (r.height === rect.height) ) return;
+    this.#sceneRect = rect.clone();
+    this.background.clear().beginFill(0xFFFFFF, 1).drawShape(rect).endFill();
+  }
+
+  /**
+   * Draw the roof punch texture (already screen-space) in black over the background, at screen coordinates.
+   */
+  #refreshPunch() {
+    const punch = canvas.masks.fogShadingPunch;
+    this.punch.visible = !!punch?.count;
+    if ( !this.punch.visible ) return;
+    this.punch.texture = punch.renderTexture;
+    this.punch.transform.setFromMatrix(this.worldTransform.clone().invert());
+    this.punch.updateTransform();
   }
 }
 
@@ -505,6 +616,8 @@ Hooks.once("setup", refreshState);
 Hooks.on("canvasInit", () => {
   preview = null;
   refreshState();
+  // Punch renders first: RevealMask samples its texture in the same frame
+  if ( !canvas.masks.fogShadingPunch ) canvas.hidden.addMask("fogShadingPunch", new RoofPunchMask());
   if ( !canvas.masks.fogShadingReveal ) canvas.hidden.addMask("fogShadingReveal", new RevealMask());
 });
 Hooks.on("updateScene", (scene, changes) => {
