@@ -245,9 +245,8 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
     const sprites = this.roofs.children;
     const toLocal = this.worldTransform.clone().invert();
     let i = 0;
-    for ( const tile of canvas.tiles.placeables ) {
-      const mesh = tile.mesh;
-      if ( !mesh || !tile.visible || !mesh.visible || !RevealMask.#isFadedRoof(mesh) ) continue;
+    for ( const mesh of RevealMask.#roofMeshes() ) {
+      if ( !mesh.visible || !RevealMask.#isFadedRoof(mesh) ) continue;
       const sprite = sprites[i++] ?? this.roofs.addChild(new PIXI.Sprite());
       sprite.texture = mesh.texture;
       sprite.anchor.copyFrom(mesh.anchor);
@@ -262,7 +261,20 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
   }
 
   /**
-   * Is this tile mesh a roof that core currently has faded?
+   * Candidate roof meshes: visible tiles, plus the background of any Level flagged as a roof level.
+   * @yields {PrimarySpriteMesh}
+   */
+  static *#roofMeshes() {
+    for ( const tile of canvas.tiles.placeables ) {
+      if ( tile.mesh && tile.visible ) yield tile.mesh;
+    }
+    for ( const mesh of canvas.primary.levelTextures ) {
+      if ( mesh[ROOF_LEVEL_KEY] ) yield mesh;
+    }
+  }
+
+  /**
+   * Is this mesh a roof that core currently has faded?
    * Hover-fade only counts when no vision occlusion is active; with vision active core limits hover-fade to what
    * your tokens can already see.
    * @param {PrimarySpriteMesh} mesh
@@ -273,6 +285,45 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
     if ( mesh.occluded ) return true;
     return !canvas.masks.occlusion.vision && (mesh._hoverFadeState?.occlusion > 0);
   }
+}
+
+/* -------------------------------------------- */
+/*  Roof Levels                                 */
+/* -------------------------------------------- */
+
+/** Property set on a Level background mesh that acts as a roof. */
+const ROOF_LEVEL_KEY = `${MODULE_ID}.roof`;
+
+/**
+ * Make the background of every Level flagged as a roof level fade (whole image) while an occluding token is
+ * under any of its opaque pixels, exactly like a Fade-mode roof tile. Core draws Level textures with Surface
+ * occlusion only; Fade is added on top so region-based surfaces keep working.
+ */
+function applyRoofLevels() {
+  if ( !canvas.scene || !canvas.primary?.levelTextures ) return;
+  const M = CONST.OCCLUSION_MODES;
+  for ( const level of canvas.scene?.levels ?? [] ) {
+    const mesh = canvas.primary.levelTextures.find(m => m.name === `Level.${level.index}.background`);
+    if ( !mesh ) continue;
+    const roof = !!level.flags[MODULE_ID]?.roof;
+    mesh.occlusionMode = roof ? (M.SURFACE | M.FADE) : M.SURFACE;
+    mesh[ROOF_LEVEL_KEY] = roof;
+  }
+  canvas.perception.update({refreshOcclusion: true});
+}
+
+/**
+ * Add a "Roof Level" checkbox to the Background section of the Level config sheet.
+ */
+function injectLevelConfig(app, element) {
+  if ( !game.user.isGM ) return;
+  if ( element.querySelector(`[name="flags.${MODULE_ID}.roof"]`) ) return;
+  const bgFieldset = element.querySelector('[name="background.src"]')?.closest("fieldset");
+  if ( !bgFieldset ) return;
+  bgFieldset.append(new BooleanField().toFormGroup(
+    {label: game.i18n.localize("FOGSHADING.RoofLevel.Name"), hint: game.i18n.localize("FOGSHADING.RoofLevel.Hint")},
+    {name: `flags.${MODULE_ID}.roof`, value: !!app.document.flags[MODULE_ID]?.roof}
+  ));
 }
 
 /* -------------------------------------------- */
@@ -433,6 +484,11 @@ Hooks.on("updateScene", (scene, changes) => {
   if ( (scene.id === canvas.scene?.id) && foundry.utils.hasProperty(changes, `flags.${MODULE_ID}`) ) refreshState();
 });
 Hooks.on("renderSceneConfig", injectSceneConfig);
+Hooks.on("renderLevelConfig", injectLevelConfig);
+Hooks.on("drawPrimaryCanvasGroup", applyRoofLevels);
+Hooks.on("updateLevel", (level, changes) => {
+  if ( (level.parent === canvas.scene) && foundry.utils.hasProperty(changes, `flags.${MODULE_ID}`) ) applyRoofLevels();
+});
 Hooks.on("closeSceneConfig", () => {
   if ( preview === null ) return;
   preview = null;
