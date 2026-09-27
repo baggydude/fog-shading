@@ -527,11 +527,6 @@ Hooks.once("init", () => {
   CONFIG.Canvas.visibilityFilter = ShadedVisibilityFilter;
 });
 
-// GM hover reveals roofs immediately rather than after core's 250ms delay + 750ms fade
-Hooks.once("setup", () => {
-  if ( game.user.isGM ) Object.assign(CONFIG.Canvas.hoverFade, {delay: 0, duration: 0});
-});
-
 Hooks.once("setup", refreshState);
 Hooks.on("canvasInit", () => {
   preview = null;
