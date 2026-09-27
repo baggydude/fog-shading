@@ -17,7 +17,6 @@ const state = {
   sceneDarknessInfluence: 0.5,
   useFogImage: false,
   neverFog: false,
-  ownRoofFade: true,
   revealedDarkness: 0.2,
   revealedSaturation: 0.85
 };
@@ -44,7 +43,6 @@ const SETTINGS = {
   sceneDarknessInfluence: {key: "SceneDarknessInfluence", type: () => slider(0.5)},
   useFogImage: {key: "UseFogImage", type: () => new BooleanField({initial: false})},
   neverFog: {key: "NeverFog", type: () => new BooleanField({initial: false})},
-  ownRoofFade: {key: "OwnRoofFade", type: () => new BooleanField({initial: true})},
   revealedDarkness: {key: "RevealedDarkness", type: () => slider(0.2)},
   revealedSaturation: {key: "RevealedSaturation", type: () => slider(0.85)}
 };
@@ -80,19 +78,6 @@ function refreshState() {
     const value = source?.[name] ?? game.settings.get(MODULE_ID, name);
     state[name] = SETTINGS[name].isColor ? foundry.utils.Color.from(value).rgb : value;
   }
-  applyTokenOcclusionMode();
-}
-
-/**
- * Apply the "roofs fade only for your tokens" setting to core's token occlusion mode. Core resets the mode on
- * every Tokens layer draw, so this is reapplied from the drawTokenLayer hook as well as on setting changes.
- * Removing VISIBLE stops any visible token (e.g. an NPC seen through a doorway) from fading the roof above it.
- */
-function applyTokenOcclusionMode() {
-  if ( !canvas?.scene || !canvas.tokens ) return;
-  const M = CONST.TOKEN_OCCLUSION_MODES;
-  const base = game.user.isGM ? (M.CONTROLLED | M.VISIBLE | M.HIGHLIGHTED) : (M.OWNED | M.VISIBLE);
-  canvas.tokens.occlusionMode = state.ownRoofFade ? (base & ~M.VISIBLE) : base;
 }
 
 /* -------------------------------------------- */
@@ -501,7 +486,6 @@ Hooks.on("updateScene", (scene, changes) => {
 Hooks.on("renderSceneConfig", injectSceneConfig);
 Hooks.on("renderLevelConfig", injectLevelConfig);
 Hooks.on("drawPrimaryCanvasGroup", applyRoofLevels);
-Hooks.on("drawTokenLayer", applyTokenOcclusionMode);
 Hooks.on("updateLevel", (level, changes) => {
   if ( (level.parent === canvas.scene) && foundry.utils.hasProperty(changes, `flags.${MODULE_ID}`) ) applyRoofLevels();
 });
