@@ -53,7 +53,7 @@
     },
     "NeverFog": {
       "Name": "Never Fog Outside Buildings",
-      "Hint": "Only buildings you're inside get fog. Everywhere else the map is always shown (tokens still need line of sight, and fog memory is unaffected). A building is any tile with a Fade, Radial or Vision occlusion mode: while that roof tile is faded, the area under it gets normal fog."
+      "Hint": "While at least one of your tokens is outside, the map outside buildings is always shown and only buildings with a faded roof get fog. While all your tokens are inside, everything uses normal fog. Tokens always need line of sight, and fog memory is unaffected. A building is a roof tile (Fade, Radial or Vision occlusion) or a Roof Level."
     },
     "RevealedDarkness": {
       "Name": "Never Fog: Darkness",

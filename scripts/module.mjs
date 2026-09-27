@@ -215,6 +215,11 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
     this.renderable = !this.#failed && state.enabled && state.neverFog && !!canvas.scene;
     if ( !this.renderable ) return;
     try {
+      // With all your tokens inside, the outside follows normal fog too
+      if ( !RevealMask.#anyViewerOutside() ) {
+        this.renderable = false;
+        return;
+      }
       this.#refreshBackground();
       this.#refreshRoofs();
     } catch(err) {
@@ -271,6 +276,25 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
     for ( const mesh of canvas.primary.levelTextures ) {
       if ( mesh[ROOF_LEVEL_KEY] ) yield mesh;
     }
+  }
+
+  /**
+   * Is at least one token you're seeing through outside, i.e. not under any roof? Uses core's own roof test
+   * (testOcclusion: below the roof and under its opaque pixels). With no vision tokens, counts as outside.
+   * @returns {boolean}
+   */
+  static #anyViewerOutside() {
+    const viewers = [];
+    for ( const source of canvas.effects.visionSources ) {
+      const token = source.object;
+      if ( source.active && (token instanceof foundry.canvas.placeables.Token) ) viewers.push(token);
+    }
+    if ( !viewers.length ) return true;
+    const roofs = [];
+    for ( const mesh of RevealMask.#roofMeshes() ) {
+      if ( mesh.visible && (mesh.occlusionMode & RevealMask.#ROOF_MODES) ) roofs.push(mesh);
+    }
+    return viewers.some(token => !roofs.some(mesh => mesh.testOcclusion(token)));
   }
 
   /**
