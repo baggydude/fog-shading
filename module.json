@@ -2,7 +2,7 @@
   "id": "fog-shading",
   "title": "Fog Shading",
   "description": "Replaces solid-black fog of war with a darkened, desaturated view of the live map. Separate darkness, saturation and tint controls for unexplored and explored-but-not-visible areas. No baked images, no extra render passes, no changes to vision or token visibility.",
-  "version": "0.6.0",
+  "version": "0.5.0",
   "compatibility": {
     "minimum": "14",
     "verified": "14"
