@@ -176,9 +176,9 @@ function readValues(fieldset) {
  * core's per-client occlusion state. Lives in the hidden canvas group alongside core's vision/occlusion masks so
  * it shares their world-to-screen transform and renders before the visibility filter samples it.
  *
- * Building footprints are regions with an occluding or exposed surface above the viewed Level's floor. A
- * footprint is removed from the mask while it is occluded (roof faded, e.g. your token is inside), so hiding a
- * roof can only ever return an area to normal fog, never reveal more.
+ * Building footprints are regions with an occluding or exposed surface above the viewed Level's floor. An
+ * occluding footprint is removed from the mask while a token you're seeing through is under it (you're inside),
+ * returning that building to normal fog.
  */
 class RevealMask extends foundry.canvas.containers.CachedContainer {
   constructor() {
@@ -222,20 +222,20 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
   }
 
   /**
-   * Rebuild the mask geometry if the mode, level, surfaces or occluded surfaces changed.
+   * Rebuild the mask geometry if the mode, level, surfaces or the set of buildings you're inside changed.
    */
   #refreshShapes() {
     const level = canvas.level;
     const surfaces = canvas.scene.getSurfaces({level: level.id});
-    const occluded = canvas.masks.occlusion.occludedSurfaces;
-    const key = `${state.revealMode}|${level.id}|${[...occluded].map(s => s.key).join(";")}`;
+    const floor = level.elevation.base;
+    const footprints = surfaces.filter(s => (s.occlusion || s.exposure) && (s.elevation > floor));
+    const inside = RevealMask.#getInsideSurfaces(footprints);
+    const key = `${state.revealMode}|${level.id}|${inside.map(s => s.key).join(";")}`;
     if ( (key === this.#key) && (surfaces === this.#surfaces) ) return;
     this.#key = key;
     this.#surfaces = surfaces;
 
     const g = this.shapes.clear();
-    const floor = level.elevation.base;
-    const footprints = surfaces.filter(s => (s.occlusion || s.exposure) && (s.elevation > floor));
 
     // Revealed area: the whole scene (outdoors) or just the building footprints (roofs)
     g.beginFill(0xFFFFFF, 1);
@@ -243,10 +243,36 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
     else for ( const s of footprints ) s.region.polygonTree.drawShape(g);
     g.endFill();
 
-    // Punch out buildings whose roof is currently hidden, restoring normal fog inside them
+    // Punch out the buildings you're inside, restoring normal fog there
     g.beginFill(0x000000, 1);
-    for ( const s of occluded ) s.region.polygonTree.drawShape(g);
+    for ( const s of inside ) s.region.polygonTree.drawShape(g);
     g.endFill();
+  }
+
+  /**
+   * The occluding surfaces above a token you're seeing through, i.e. the buildings you're inside.
+   *
+   * Deliberately not core's occludedSurfaces: core also occludes for any visible token (every token for the GM),
+   * hovered regions, and all foreground surfaces while the Token layer is inactive, none of which mean you're
+   * inside. Exposure-only surfaces (e.g. a roof outline including the overhang) are never punched out.
+   * @param {object[]} footprints
+   * @returns {object[]}
+   */
+  static #getInsideSurfaces(footprints) {
+    const inside = [];
+    const viewers = [];
+    for ( const source of canvas.effects.visionSources ) {
+      const token = source.object;
+      if ( source.active && (token instanceof foundry.canvas.placeables.Token) ) viewers.push(token);
+    }
+    if ( !viewers.length ) return inside;
+    for ( const s of footprints ) {
+      if ( !s.occlusion ) continue;
+      const contains = viewers.some(t => (s.elevation > t.document.elevation)
+        && s.region.polygonTree.testPoint(t.center));
+      if ( contains ) inside.push(s);
+    }
+    return inside;
   }
 }
 
