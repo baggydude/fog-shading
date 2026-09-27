@@ -16,7 +16,7 @@ const state = {
   exploredTintStrength: 0.0,
   sceneDarknessInfluence: 0.5,
   useFogImage: false,
-  revealMode: "off",
+  neverFog: false,
   revealedDarkness: 0.2,
   revealedSaturation: 0.85
 };
@@ -25,22 +25,10 @@ const state = {
 /*  Settings                                    */
 /* -------------------------------------------- */
 
-const {BooleanField, NumberField, ColorField, StringField} = foundry.data.fields;
+const {BooleanField, NumberField, ColorField} = foundry.data.fields;
 
 const slider = initial => new NumberField({required: true, nullable: false, min: 0, max: 1, step: 0.01, initial});
 const color = initial => new ColorField({required: true, nullable: false, initial});
-
-/**
- * Which areas are never drawn as fog.
- * - off: normal fog everywhere
- * - roofs: building footprints whose roof is currently showing
- * - outdoors: everything except the footprints of buildings whose roof is currently hidden (i.e. you're inside)
- */
-const REVEAL_MODES = {
-  off: "FOGSHADING.RevealMode.Off",
-  roofs: "FOGSHADING.RevealMode.Roofs",
-  outdoors: "FOGSHADING.RevealMode.Outdoors"
-};
 
 const SETTINGS = {
   enabled: {key: "Enabled", type: () => new BooleanField({initial: true})},
@@ -54,8 +42,7 @@ const SETTINGS = {
   exploredTintStrength: {key: "ExploredTintStrength", type: () => slider(0.0)},
   sceneDarknessInfluence: {key: "SceneDarknessInfluence", type: () => slider(0.5)},
   useFogImage: {key: "UseFogImage", type: () => new BooleanField({initial: false})},
-  revealMode: {key: "RevealMode", isString: true,
-    type: () => new StringField({required: true, blank: false, initial: "off", choices: REVEAL_MODES})},
+  neverFog: {key: "NeverFog", type: () => new BooleanField({initial: false})},
   revealedDarkness: {key: "RevealedDarkness", type: () => slider(0.2)},
   revealedSaturation: {key: "RevealedSaturation", type: () => slider(0.85)}
 };
@@ -128,7 +115,7 @@ function injectSceneConfig(app, element) {
     if ( isColor ) value = foundry.utils.Color.from(value).css;
     body.append(type().toFormGroup(
       {label: loc(`FOGSHADING.${key}.Name`), hint: loc(`FOGSHADING.${key}.Hint`)},
-      {name: `flags.${MODULE_ID}.${name}`, value, localize: true}
+      {name: `flags.${MODULE_ID}.${name}`, value}
     ));
   }
   fieldset.append(body);
@@ -157,11 +144,11 @@ function injectSceneConfig(app, element) {
  */
 function readValues(fieldset) {
   const values = {};
-  for ( const [name, {isColor, isString}] of Object.entries(SETTINGS) ) {
+  for ( const [name, {isColor}] of Object.entries(SETTINGS) ) {
     const input = fieldset.querySelector(`[name="flags.${MODULE_ID}.${name}"]`);
     if ( !input ) continue;
     if ( input.type === "checkbox" ) values[name] = input.checked;
-    else if ( isColor || isString ) values[name] = input.value || undefined;
+    else if ( isColor ) values[name] = input.value || undefined;
     else values[name] = Number(input.value);
   }
   return values;
@@ -172,18 +159,19 @@ function readValues(fieldset) {
 /* -------------------------------------------- */
 
 /**
- * Screen-space mask (red channel) of areas that are never drawn as fog, built from Define Surface regions and
- * core's per-client occlusion state. Lives in the hidden canvas group alongside core's vision/occlusion masks so
- * it shares their world-to-screen transform and renders before the visibility filter samples it.
+ * Screen-space mask (red channel) of areas that are never drawn as fog. Lives in the hidden canvas group
+ * alongside core's vision/occlusion masks so it renders before the visibility filter samples it.
  *
- * Building footprints are regions with an occluding or exposed surface above the viewed Level's floor. An
- * occluding footprint is removed from the mask while a token you're seeing through is under it (you're inside),
- * returning that building to normal fog.
+ * The whole scene is revealed, minus every roof tile that core currently has faded. A roof is any tile with a
+ * Fade, Radial or Vision occlusion mode; its cut-out is the tile's own image (alpha), drawn with the tile's
+ * transform. Because this keys off the same flag that fades the roof, fog returns beneath a roof at exactly the
+ * moment the roof disappears.
  */
 class RevealMask extends foundry.canvas.containers.CachedContainer {
   constructor() {
     super();
-    this.shapes = this.addChild(new PIXI.LegacyGraphics());
+    this.background = this.addChild(new PIXI.LegacyGraphics());
+    this.roofs = this.addChild(new PIXI.Container());
   }
 
   /** @override */
@@ -193,89 +181,82 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
     multisample: PIXI.MSAA_QUALITY.NONE
   };
 
+  /** Occlusion modes that make a tile a roof. */
+  static #ROOF_MODES = CONST.OCCLUSION_MODES.FADE | CONST.OCCLUSION_MODES.RADIAL | CONST.OCCLUSION_MODES.VISION;
+
   /** @override */
   clearColor = [0, 0, 0, 0];
 
   /**
-   * Signature of the inputs the current shapes were drawn from.
-   * @type {string|null}
+   * The scene rect the background was drawn for.
+   * @type {PIXI.Rectangle|null}
    */
-  #key = null;
-
-  /** @type {readonly object[]|null} */
-  #surfaces = null;
+  #sceneRect = null;
 
   /** @override */
   clear() {
-    this.shapes.clear();
-    this.#key = null;
-    this.#surfaces = null;
+    this.background.clear();
+    this.#sceneRect = null;
+    for ( const sprite of this.roofs.children ) {
+      sprite.texture = PIXI.Texture.EMPTY;
+      sprite.visible = false;
+    }
     return this;
   }
 
   /** @override */
   render(renderer) {
-    this.renderable = (state.enabled && (state.revealMode !== "off") && !!canvas.level);
+    this.renderable = state.enabled && state.neverFog && !!canvas.scene;
     if ( !this.renderable ) return;
-    this.#refreshShapes();
+    this.#refreshBackground();
+    this.#refreshRoofs();
     super.render(renderer);
   }
 
   /**
-   * Rebuild the mask geometry if the mode, level, surfaces or the set of buildings you're inside changed.
+   * Fill the scene rect: everything is revealed unless a faded roof says otherwise.
    */
-  #refreshShapes() {
-    const level = canvas.level;
-    const surfaces = canvas.scene.getSurfaces({level: level.id});
-    const floor = level.elevation.base;
-    const footprints = surfaces.filter(s => (s.occlusion || s.exposure) && (s.elevation > floor));
-    const inside = RevealMask.#getInsideSurfaces(footprints);
-    const key = `${state.revealMode}|${level.id}|${inside.map(s => s.key).join(";")}`;
-    if ( (key === this.#key) && (surfaces === this.#surfaces) ) return;
-    this.#key = key;
-    this.#surfaces = surfaces;
-
-    const g = this.shapes.clear();
-
-    // Revealed area: the whole scene (outdoors) or just the building footprints (roofs)
-    g.beginFill(0xFFFFFF, 1);
-    if ( state.revealMode === "outdoors" ) g.drawShape(canvas.dimensions.sceneRect);
-    else for ( const s of footprints ) s.region.polygonTree.drawShape(g);
-    g.endFill();
-
-    // Punch out the buildings you're inside, restoring normal fog there
-    g.beginFill(0x000000, 1);
-    for ( const s of inside ) s.region.polygonTree.drawShape(g);
-    g.endFill();
+  #refreshBackground() {
+    const rect = canvas.dimensions.sceneRect;
+    if ( this.#sceneRect?.equals(rect) ) return;
+    this.#sceneRect = rect.clone();
+    this.background.clear().beginFill(0xFFFFFF, 1).drawShape(rect).endFill();
   }
 
   /**
-   * The occluding surfaces above a token you're seeing through, i.e. the buildings you're inside.
-   *
-   * Deliberately not core's occludedSurfaces: core also occludes for any visible token (every token for the GM),
-   * hovered regions, and all foreground surfaces while the Token layer is inactive, none of which mean you're
-   * inside. Exposure-only surfaces (e.g. a roof outline including the overhang) are never punched out.
-   * @param {object[]} footprints
-   * @returns {object[]}
+   * Draw each currently faded roof tile's image in black, restoring normal fog beneath it.
    */
-  static #getInsideSurfaces(footprints) {
-    const inside = [];
-    const viewers = [];
-    for ( const source of canvas.effects.visionSources ) {
-      const token = source.object;
-      if ( source.active && (token instanceof foundry.canvas.placeables.Token) ) viewers.push(token);
+  #refreshRoofs() {
+    const sprites = this.roofs.children;
+    const toLocal = this.worldTransform.clone().invert();
+    let i = 0;
+    for ( const tile of canvas.tiles.placeables ) {
+      const mesh = tile.mesh;
+      if ( !mesh || !tile.visible || !mesh.visible || !RevealMask.#isFadedRoof(mesh) ) continue;
+      const sprite = sprites[i++] ?? this.roofs.addChild(new PIXI.Sprite());
+      sprite.texture = mesh.texture;
+      sprite.anchor.copyFrom(mesh.anchor);
+      sprite.tint = 0x000000;
+      sprite.transform.setFromMatrix(toLocal.clone().append(mesh.worldTransform));
+      sprite.visible = true;
     }
-    if ( !viewers.length ) return inside;
+    for ( ; i < sprites.length; i++ ) sprites[i].visible = false;
 
-    // Same test points core uses for surface occlusion, so a roof your token fades is always fogged beneath
-    const points = viewers.map(t => ({elevation: t.document.elevation, points: t.document.getOcclusionTestPoints()}));
-    for ( const s of footprints ) {
-      if ( !s.occlusion ) continue;
-      const tree = s.region.polygonTree;
-      const contains = points.some(v => (s.elevation > v.elevation) && v.points.some(p => tree.testPoint(p)));
-      if ( contains ) inside.push(s);
-    }
-    return inside;
+    // The stage's transform pass already ran this frame; recompute so sprites match the roofs now, not next frame
+    this.roofs.updateTransform();
+  }
+
+  /**
+   * Is this tile mesh a roof that core currently has faded?
+   * Hover-fade only counts when no vision occlusion is active; with vision active core limits hover-fade to what
+   * your tokens can already see.
+   * @param {PrimarySpriteMesh} mesh
+   * @returns {boolean}
+   */
+  static #isFadedRoof(mesh) {
+    if ( !(mesh.occlusionMode & RevealMask.#ROOF_MODES) ) return false;
+    if ( mesh.occluded ) return true;
+    return !canvas.masks.occlusion.vision && (mesh._hoverFadeState?.occlusion > 0);
   }
 }
 
