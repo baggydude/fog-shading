@@ -360,32 +360,6 @@ function applyRoofLevels() {
 }
 
 /**
- * Roof level meshes currently hidden because the GM is hovering them.
- * @type {Set<PrimarySpriteMesh>}
- */
-const peekedRoofs = new Set();
-
-/**
- * GM hover: instantly hide a roof level while the pointer is over its opaque pixels (per its alpha threshold),
- * so tokens beneath are easy to select and edit. Only roofs above the viewed floor count. Uses the mesh's own
- * unoccludedAlpha rather than core hover-fade, so it is instant, independent of token vision, and leaves core's
- * token-triggered fading untouched. Deliberately not treated as "faded" by Never Fog: the GM sees the interior.
- * @param {PIXI.Point} position    The mouse position in canvas coordinates
- */
-function onRoofHover(position) {
-  if ( !game.user.isGM || !canvas.ready ) return;
-  const floor = canvas.level?.elevation.base ?? -Infinity;
-  for ( const mesh of canvas.primary.levelTextures ) {
-    const hovered = !!mesh[ROOF_LEVEL_KEY] && mesh.visible && (mesh.elevation > floor)
-      && mesh.containsCanvasPoint(position);
-    if ( hovered === peekedRoofs.has(mesh) ) continue;
-    if ( hovered ) peekedRoofs.add(mesh);
-    else peekedRoofs.delete(mesh);
-    mesh.unoccludedAlpha = hovered ? 0 : 1;
-  }
-}
-
-/**
  * Add a "Roof Level" select to the Background section of the Level config sheet.
  */
 function injectLevelConfig(app, element) {
@@ -562,15 +536,7 @@ Hooks.on("updateScene", (scene, changes) => {
 });
 Hooks.on("renderSceneConfig", injectSceneConfig);
 Hooks.on("renderLevelConfig", injectLevelConfig);
-Hooks.on("drawPrimaryCanvasGroup", () => {
-  peekedRoofs.clear();   // Level meshes are recreated on every primary draw
-  applyRoofLevels();
-});
-Hooks.on("canvasReady", () => {
-  if ( game.user.isGM ) {
-    canvas.registerMouseMoveHandler(onRoofHover, foundry.canvas.Canvas.MOUSE_MOVE_HANDLER_PRIORITIES.LOW);
-  }
-});
+Hooks.on("drawPrimaryCanvasGroup", applyRoofLevels);
 Hooks.on("updateLevel", (level, changes) => {
   if ( (level.parent === canvas.scene) && foundry.utils.hasProperty(changes, `flags.${MODULE_ID}`) ) applyRoofLevels();
 });
