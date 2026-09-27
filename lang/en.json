@@ -65,7 +65,10 @@
     },
     "RoofLevel": {
       "Name": "Roof Level (Fog Shading)",
-      "Hint": "Treat this Level's background as a roof: the whole image fades while a token is under any of its opaque pixels (see Alpha Threshold), like a Fade-mode roof tile. With Never Fog enabled, the area under the roof gets normal fog while it's faded. Best for a single building; use roof tiles for separate buildings."
+      "Hint": "Treat this Level's background as a roof. Its opaque pixels (see Alpha Threshold) are the roof. With Never Fog enabled, the area under a faded roof gets normal fog. Use roof tiles for separate buildings.",
+      "None": "Off",
+      "Fade": "Whole level: fades entirely while a token is under it",
+      "Vision": "Vision: see-through only where your tokens can see"
     }
   }
 }

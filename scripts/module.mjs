@@ -295,34 +295,61 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
 const ROOF_LEVEL_KEY = `${MODULE_ID}.roof`;
 
 /**
- * Make the background of every Level flagged as a roof level fade (whole image) while an occluding token is
- * under any of its opaque pixels, exactly like a Fade-mode roof tile. Core draws Level textures with Surface
- * occlusion only; Fade is added on top so region-based surfaces keep working.
+ * Roof level fade styles, stored in the Level's flags.fog-shading.roof.
+ * - none: not a roof
+ * - fade: the whole image fades while a token is under any of its opaque pixels (like a Fade roof tile)
+ * - vision: the image becomes see-through only where your tokens can see (like a Vision roof tile)
+ */
+const ROOF_STYLES = {
+  none: "FOGSHADING.RoofLevel.None",
+  fade: "FOGSHADING.RoofLevel.Fade",
+  vision: "FOGSHADING.RoofLevel.Vision"
+};
+
+/**
+ * The roof style of a Level. Earlier versions stored a boolean, which meant "fade".
+ * @param {Level} level
+ * @returns {"none"|"fade"|"vision"}
+ */
+function getRoofStyle(level) {
+  const value = level.flags[MODULE_ID]?.roof;
+  if ( value === true ) return "fade";
+  return value in ROOF_STYLES ? value : "none";
+}
+
+/**
+ * Give the background of every roof Level core's Fade or Vision occlusion, exactly like a roof tile. Core draws
+ * Level textures with Surface occlusion only; the roof mode is added on top so region-based surfaces keep working.
  */
 function applyRoofLevels() {
   if ( !canvas.scene || !canvas.primary?.levelTextures ) return;
   const M = CONST.OCCLUSION_MODES;
-  for ( const level of canvas.scene?.levels ?? [] ) {
+  const modes = {none: 0, fade: M.FADE, vision: M.VISION};
+  for ( const level of canvas.scene.levels ) {
     const mesh = canvas.primary.levelTextures.find(m => m.name === `Level.${level.index}.background`);
     if ( !mesh ) continue;
-    const roof = !!level.flags[MODULE_ID]?.roof;
-    mesh.occlusionMode = roof ? (M.SURFACE | M.FADE) : M.SURFACE;
-    mesh[ROOF_LEVEL_KEY] = roof;
+    const style = getRoofStyle(level);
+    mesh.occlusionMode = M.SURFACE | modes[style];
+    mesh[ROOF_LEVEL_KEY] = style !== "none";
   }
   canvas.perception.update({refreshOcclusion: true});
 }
 
 /**
- * Add a "Roof Level" checkbox to the Background section of the Level config sheet.
+ * Add a "Roof Level" select to the Background section of the Level config sheet.
  */
 function injectLevelConfig(app, element) {
   if ( !game.user.isGM ) return;
-  if ( element.querySelector(`[name="flags.${MODULE_ID}.roof"]`) ) return;
+  const name = `flags.${MODULE_ID}.roof`;
+  if ( element.querySelector(`[name="${name}"]`) ) return;
   const bgFieldset = element.querySelector('[name="background.src"]')?.closest("fieldset");
   if ( !bgFieldset ) return;
-  bgFieldset.append(new BooleanField().toFormGroup(
-    {label: game.i18n.localize("FOGSHADING.RoofLevel.Name"), hint: game.i18n.localize("FOGSHADING.RoofLevel.Hint")},
-    {name: `flags.${MODULE_ID}.roof`, value: !!app.document.flags[MODULE_ID]?.roof}
+  const loc = key => game.i18n.localize(key);
+  const choices = Object.fromEntries(Object.entries(ROOF_STYLES).map(([k, v]) => [k, loc(v)]));
+  const field = new foundry.data.fields.StringField({required: true, blank: false, initial: "none", choices});
+  bgFieldset.append(field.toFormGroup(
+    {label: loc("FOGSHADING.RoofLevel.Name"), hint: loc("FOGSHADING.RoofLevel.Hint")},
+    {name, value: getRoofStyle(app.document)}
   ));
 }
 
