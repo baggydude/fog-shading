@@ -355,8 +355,6 @@ function applyRoofLevels() {
     const style = getRoofStyle(level);
     mesh.occlusionMode = M.SURFACE | modes[style];
     mesh[ROOF_LEVEL_KEY] = style !== "none";
-    // Core creates Level textures with hover-fade off; let the GM hover a roof level to see and edit beneath it
-    mesh.hoverFade = (style !== "none") && game.user.isGM;
   }
   canvas.perception.update({refreshOcclusion: true});
 }
