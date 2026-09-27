@@ -266,10 +266,13 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
       if ( source.active && (token instanceof foundry.canvas.placeables.Token) ) viewers.push(token);
     }
     if ( !viewers.length ) return inside;
+
+    // Same test points core uses for surface occlusion, so a roof your token fades is always fogged beneath
+    const points = viewers.map(t => ({elevation: t.document.elevation, points: t.document.getOcclusionTestPoints()}));
     for ( const s of footprints ) {
       if ( !s.occlusion ) continue;
-      const contains = viewers.some(t => (s.elevation > t.document.elevation)
-        && s.region.polygonTree.testPoint(t.center));
+      const tree = s.region.polygonTree;
+      const contains = points.some(v => (s.elevation > v.elevation) && v.points.some(p => tree.testPoint(p)));
       if ( contains ) inside.push(s);
     }
     return inside;
