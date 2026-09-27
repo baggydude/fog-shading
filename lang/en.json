@@ -55,6 +55,10 @@
       "Name": "Never Fog Outside Buildings",
       "Hint": "Only buildings you're inside get fog. Everywhere else the map is always shown (tokens still need line of sight, and fog memory is unaffected). A building is any tile with a Fade, Radial or Vision occlusion mode: while that roof tile is faded, the area under it gets normal fog."
     },
+    "OwnRoofFade": {
+      "Name": "Roofs Fade Only For Your Tokens",
+      "Hint": "Only tokens you control (GM) or own (players) fade roofs. Off = Foundry's default, where any token you can see also fades the roof above it, e.g. an NPC seen through an open door."
+    },
     "RevealedDarkness": {
       "Name": "Never Fog: Darkness",
       "Hint": "How dark always-shown areas are when outside your line of sight. 0 = full map brightness."
