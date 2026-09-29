@@ -11,48 +11,8 @@
       "Name": "Enable Fog Shading",
       "Hint": "Turn off to fall back to Foundry's default fog rendering (applies instantly, handy for comparing)."
     },
-    "UnexploredDarkness": {
-      "Name": "Unexplored: Darkness",
-      "Hint": "How dark never-explored areas are. 0 = full map brightness, 1 = solid black (Foundry default)."
-    },
-    "UnexploredSaturation": {
-      "Name": "Unexplored: Saturation",
-      "Hint": "Colour saturation of never-explored areas. 0 = greyscale, 1 = original colours."
-    },
-    "UnexploredTint": {
-      "Name": "Unexplored: Tint Colour",
-      "Hint": "Colour used to tint never-explored areas."
-    },
-    "UnexploredTintStrength": {
-      "Name": "Unexplored: Tint Strength",
-      "Hint": "How strongly the tint colour is applied. 0 = no tint."
-    },
-    "ExploredDarkness": {
-      "Name": "Explored: Darkness",
-      "Hint": "How dark explored areas that are not currently in sight are. 0 = full map brightness, 1 = solid black."
-    },
-    "ExploredSaturation": {
-      "Name": "Explored: Saturation",
-      "Hint": "Colour saturation of explored areas not currently in sight. 0 = greyscale, 1 = original colours."
-    },
-    "ExploredTint": {
-      "Name": "Explored: Tint Colour",
-      "Hint": "Colour used to tint explored areas not currently in sight."
-    },
-    "ExploredTintStrength": {
-      "Name": "Explored: Tint Strength",
-      "Hint": "How strongly the tint colour is applied. 0 = no tint."
-    },
-    "SceneDarknessInfluence": {
-      "Name": "Follow Scene Darkness",
-      "Hint": "How much the scene's darkness level further darkens fogged areas, so night scenes don't show brighter fog than lit areas. 0 = ignore scene darkness."
-    },
-    "UseFogImage": {
-      "Name": "Prefer Fog Images When Set",
-      "Hint": "If a Scene or Level has a Fog of War image configured, use it for unexplored areas instead of the shaded map."
-    },
     "NeverFog": {
-      "Name": "Never Fog Outside Buildings",
+      "Name": "Never Fog: Outside",
       "Hint": "While at least one of your tokens is outside, the map outside buildings is always shown and only buildings with a faded roof get fog. While all your tokens are inside, everything uses normal fog. Tokens always need line of sight, and fog memory is unaffected. A building is a roof tile (Fade, Radial or Vision occlusion) or a Roof Level."
     },
     "RevealedDarkness": {
@@ -62,6 +22,26 @@
     "RevealedSaturation": {
       "Name": "Never Fog: Saturation",
       "Hint": "Colour saturation of always-shown areas outside your line of sight. 0 = greyscale, 1 = original colours."
+    },
+    "UnexploredDarkness": {
+      "Name": "Unexplored: Darkness",
+      "Hint": "How dark never-explored areas are. 0 = full map brightness, 1 = solid black (Foundry default)."
+    },
+    "UnexploredSaturation": {
+      "Name": "Unexplored: Saturation",
+      "Hint": "Colour saturation of never-explored areas. 0 = greyscale, 1 = original colours."
+    },
+    "ExploredDarkness": {
+      "Name": "Explored: Darkness",
+      "Hint": "How dark explored areas that are not currently in sight are. 0 = full map brightness, 1 = solid black."
+    },
+    "ExploredSaturation": {
+      "Name": "Explored: Saturation",
+      "Hint": "Colour saturation of explored areas not currently in sight. 0 = greyscale, 1 = original colours."
+    },
+    "SceneDarknessInfluence": {
+      "Name": "Follow Scene Darkness",
+      "Hint": "How much the scene's darkness level further darkens fogged areas, so night scenes don't show brighter fog than lit areas. 0 = ignore scene darkness."
     },
     "RoofLevel": {
       "Name": "Roof Level (Fog Shading)",

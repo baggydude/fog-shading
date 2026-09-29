@@ -6,46 +6,62 @@ const MODULE_ID = "fog-shading";
  */
 const state = {
   enabled: true,
-  unexploredDarkness: 0.85,
-  unexploredSaturation: 0.0,
-  unexploredTint: [0, 0, 0],
-  unexploredTintStrength: 0.0,
-  exploredDarkness: 0.55,
-  exploredSaturation: 0.35,
-  exploredTint: [0, 0, 0],
-  exploredTintStrength: 0.0,
-  sceneDarknessInfluence: 0.5,
-  useFogImage: false,
   neverFog: false,
   revealedDarkness: 0.2,
-  revealedSaturation: 0.85
+  revealedSaturation: 0.85,
+  unexploredDarkness: 0.85,
+  unexploredSaturation: 0.0,
+  exploredDarkness: 0.55,
+  exploredSaturation: 0.35,
+  sceneDarknessInfluence: 0.5
 };
 
 /* -------------------------------------------- */
 /*  Settings                                    */
 /* -------------------------------------------- */
 
-const {BooleanField, NumberField, ColorField} = foundry.data.fields;
+const {BooleanField, NumberField} = foundry.data.fields;
 
 const slider = initial => new NumberField({required: true, nullable: false, min: 0, max: 1, step: 0.01, initial});
-const color = initial => new ColorField({required: true, nullable: false, initial});
 
+/**
+ * Settings in display order. `dependsOn` names a checkbox setting; the input is only shown while it is ticked.
+ */
 const SETTINGS = {
   enabled: {key: "Enabled", type: () => new BooleanField({initial: true})},
+  neverFog: {key: "NeverFog", type: () => new BooleanField({initial: false})},
+  revealedDarkness: {key: "RevealedDarkness", type: () => slider(0.2), dependsOn: "neverFog"},
+  revealedSaturation: {key: "RevealedSaturation", type: () => slider(0.85), dependsOn: "neverFog"},
   unexploredDarkness: {key: "UnexploredDarkness", type: () => slider(0.85)},
   unexploredSaturation: {key: "UnexploredSaturation", type: () => slider(0.0)},
-  unexploredTint: {key: "UnexploredTint", type: () => color("#1a2233"), isColor: true},
-  unexploredTintStrength: {key: "UnexploredTintStrength", type: () => slider(0.0)},
   exploredDarkness: {key: "ExploredDarkness", type: () => slider(0.55)},
   exploredSaturation: {key: "ExploredSaturation", type: () => slider(0.35)},
-  exploredTint: {key: "ExploredTint", type: () => color("#1a2233"), isColor: true},
-  exploredTintStrength: {key: "ExploredTintStrength", type: () => slider(0.0)},
-  sceneDarknessInfluence: {key: "SceneDarknessInfluence", type: () => slider(0.5)},
-  useFogImage: {key: "UseFogImage", type: () => new BooleanField({initial: false})},
-  neverFog: {key: "NeverFog", type: () => new BooleanField({initial: false})},
-  revealedDarkness: {key: "RevealedDarkness", type: () => slider(0.2)},
-  revealedSaturation: {key: "RevealedSaturation", type: () => slider(0.85)}
+  sceneDarknessInfluence: {key: "SceneDarknessInfluence", type: () => slider(0.5)}
 };
+
+/**
+ * Show or hide dependent inputs (e.g. the Never Fog sliders) according to their controlling checkbox.
+ * @param {HTMLElement} root              Element containing the inputs
+ * @param {(name: string) => string} inputName  Maps a setting name to its input's name attribute
+ */
+function bindDependencies(root, inputName) {
+  for ( const [name, {dependsOn}] of Object.entries(SETTINGS) ) {
+    if ( !dependsOn ) continue;
+    const group = root.querySelector(`[name="${inputName(name)}"]`)?.closest(".form-group");
+    const control = root.querySelector(`[name="${inputName(dependsOn)}"]`);
+    if ( !group || !control ) continue;
+    const sync = () => group.hidden = !control.checked;
+    control.addEventListener("change", sync);
+    sync();
+  }
+}
+
+/**
+ * Apply dependent-input visibility in the module settings window.
+ */
+function onRenderSettingsConfig(app, element) {
+  bindDependencies(element, name => `${MODULE_ID}.${name}`);
+}
 
 function registerSettings() {
   for ( const [name, {key, type}] of Object.entries(SETTINGS) ) {
@@ -74,10 +90,7 @@ let preview = null;
 function refreshState() {
   const flags = canvas?.scene?.flags?.[MODULE_ID];
   const source = preview ?? (flags?.override ? flags : null);
-  for ( const name of Object.keys(SETTINGS) ) {
-    const value = source?.[name] ?? game.settings.get(MODULE_ID, name);
-    state[name] = SETTINGS[name].isColor ? foundry.utils.Color.from(value).rgb : value;
-  }
+  for ( const name of Object.keys(SETTINGS) ) state[name] = source?.[name] ?? game.settings.get(MODULE_ID, name);
 }
 
 /* -------------------------------------------- */
@@ -110,15 +123,14 @@ function injectSceneConfig(app, element) {
   // Value inputs stay in the DOM (and submitted) while hidden so values survive toggling the override
   const body = document.createElement("div");
   body.classList.add("fog-shading-values");
-  for ( const [name, {key, type, isColor}] of Object.entries(SETTINGS) ) {
-    let value = flags[name] ?? game.settings.get(MODULE_ID, name);
-    if ( isColor ) value = foundry.utils.Color.from(value).css;
+  for ( const [name, {key, type}] of Object.entries(SETTINGS) ) {
     body.append(type().toFormGroup(
       {label: loc(`FOGSHADING.${key}.Name`), hint: loc(`FOGSHADING.${key}.Hint`)},
-      {name: `flags.${MODULE_ID}.${name}`, value}
+      {name: `flags.${MODULE_ID}.${name}`, value: flags[name] ?? game.settings.get(MODULE_ID, name)}
     ));
   }
   fieldset.append(body);
+  bindDependencies(body, name => `flags.${MODULE_ID}.${name}`);
 
   const overrideInput = override.querySelector("input");
   const sync = () => {
@@ -144,11 +156,10 @@ function injectSceneConfig(app, element) {
  */
 function readValues(fieldset) {
   const values = {};
-  for ( const [name, {isColor}] of Object.entries(SETTINGS) ) {
+  for ( const name of Object.keys(SETTINGS) ) {
     const input = fieldset.querySelector(`[name="flags.${MODULE_ID}.${name}"]`);
     if ( !input ) continue;
     if ( input.type === "checkbox" ) values[name] = input.checked;
-    else if ( isColor ) values[name] = input.value || undefined;
     else values[name] = Number(input.value);
   }
   return values;
@@ -388,7 +399,7 @@ function injectLevelConfig(app, element) {
  *
  * Core renders unexplored fog as a flat colour (or a fog overlay image) and explored fog as a tinted,
  * half-transparent version of the primary canvas render. This subclass instead grades the primary render
- * (the live map, including any visible lower Levels) with independent darkness / saturation / tint for both
+ * (the live map, including any visible lower Levels) with independent darkness / saturation for both
  * states. The fog exploration mask and vision tests are untouched, and hidden tokens are never drawn into
  * the primary render, so nothing is revealed that core would hide.
  */
@@ -399,14 +410,11 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
     return {
       ...super.defaultUniforms,
       fsEnabled: true,
-      fsUseFogImage: false,
       fsEnvFactor: 1,
-      fsUnexplored: [0.85, 0, 0],         // darkness, saturation, tint strength
-      fsUnexploredTint: [0, 0, 0],
-      fsExplored: [0.55, 0.35, 0],
-      fsExploredTint: [0, 0, 0],
+      fsUnexplored: [0.85, 0],            // darkness, saturation
+      fsExplored: [0.55, 0.35],
       fsReveal: false,
-      fsRevealed: [0.2, 0.85, 0],
+      fsRevealed: [0.2, 0.85],
       fsRevealTexture: PIXI.Texture.WHITE
     };
   }
@@ -429,14 +437,11 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
     uniform vec3 exploredColor;`}
 
     uniform bool fsEnabled;
-    uniform bool fsUseFogImage;
     uniform float fsEnvFactor;
-    uniform vec3 fsUnexplored;
-    uniform vec3 fsUnexploredTint;
-    uniform vec3 fsExplored;
-    uniform vec3 fsExploredTint;
+    uniform vec2 fsUnexplored;
+    uniform vec2 fsExplored;
     uniform bool fsReveal;
-    uniform vec3 fsRevealed;
+    uniform vec2 fsRevealed;
     uniform sampler2D fsRevealTexture;
 
     ${this.CONSTANTS}
@@ -451,11 +456,9 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
       return vec4(pix.rgb / pix.a, pix.a);
     }
 
-    // params: x = darkness, y = saturation, z = tint strength
-    vec3 grade(in vec3 color, in vec3 params, in vec3 tint) {
-      float lum = dot(BT709, color);
-      vec3 c = mix(vec3(lum), color, params.y);
-      c = mix(c, tint * lum * 2.0, params.z);
+    // params: x = darkness, y = saturation
+    vec3 grade(in vec3 color, in vec2 params) {
+      vec3 c = mix(vec3(dot(BT709, color)), color, params.y);
       return clamp(c * (1.0 - params.x) * fsEnvFactor, 0.0, 1.0);
     }
 
@@ -464,24 +467,24 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
       ${persistent ? "" : "float v = texture2D(visionTexture, vMaskTextureCoord).r;"}
       vec4 baseColor = texture2D(primaryTexture, vMaskTextureCoord);
 
-      // Unexplored
+      // Unexplored (core's flat colour / fog image only when Fog Shading is disabled)
       vec4 unexplored;
-      if ( hasOverlayTexture && (fsUseFogImage || !fsEnabled) ) {
+      if ( fsEnabled ) unexplored = vec4(grade(baseColor.rgb, fsUnexplored), 1.0);
+      else if ( hasOverlayTexture ) {
         vec4 fogColor = unPremultiply(texture2D(overlayTexture, vOverlayTilingCoord) * getClip(vOverlayCoord));
         unexplored = mix(vec4(unexploredColor, 1.0), vec4(fogColor.rgb * backgroundColor, 1.0), fogColor.a);
       }
-      else if ( fsEnabled ) unexplored = vec4(grade(baseColor.rgb, fsUnexplored, fsUnexploredTint), 1.0);
       else unexplored = vec4(unexploredColor, 1.0);
 
-      // Never-fogged areas (roofs / outdoors) are drawn with the "revealed" grade instead of fog
+      // Never-fogged areas (outdoors) are drawn with the "revealed" grade instead of fog
       float m = fsReveal ? texture2D(fsRevealTexture, vMaskTextureCoord).r : 0.0;
-      vec4 revealed = vec4(grade(baseColor.rgb, fsRevealed, vec3(0.0)), 1.0);
+      vec4 revealed = vec4(grade(baseColor.rgb, fsRevealed), 1.0);
 
       ${persistent ? `
       gl_FragColor = mix(mix(unexplored, revealed, m), vec4(0.0), r);` : `
       // Explored but not currently visible
       vec4 explored;
-      if ( fsEnabled ) explored = vec4(grade(baseColor.rgb, fsExplored, fsExploredTint), 1.0);
+      if ( fsEnabled ) explored = vec4(grade(baseColor.rgb, fsExplored), 1.0);
       else {
         float reflec = perceivedBrightness(baseColor.rgb);
         explored = vec4(min((exploredColor * reflec) + (baseColor.rgb * exploredColor), vec3(1.0)), 0.5);
@@ -501,16 +504,11 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
     const u = this.uniforms;
     const s = state;
     u.fsEnabled = s.enabled;
-    u.fsUseFogImage = s.useFogImage;
     u.fsEnvFactor = 1 - ((canvas.environment?.darknessLevel ?? 0) * s.sceneDarknessInfluence);
     u.fsUnexplored[0] = s.unexploredDarkness;
     u.fsUnexplored[1] = s.unexploredSaturation;
-    u.fsUnexplored[2] = s.unexploredTintStrength;
     u.fsExplored[0] = s.exploredDarkness;
     u.fsExplored[1] = s.exploredSaturation;
-    u.fsExplored[2] = s.exploredTintStrength;
-    u.fsUnexploredTint = s.unexploredTint;
-    u.fsExploredTint = s.exploredTint;
     const mask = canvas.masks.fogShadingReveal;
     u.fsReveal = !!mask?.renderable;
     u.fsRevealTexture = mask?.renderTexture ?? PIXI.Texture.WHITE;
@@ -539,6 +537,7 @@ Hooks.on("updateScene", (scene, changes) => {
   if ( (scene.id === canvas.scene?.id) && foundry.utils.hasProperty(changes, `flags.${MODULE_ID}`) ) refreshState();
 });
 Hooks.on("renderSceneConfig", injectSceneConfig);
+Hooks.on("renderSettingsConfig", onRenderSettingsConfig);
 Hooks.on("renderLevelConfig", injectLevelConfig);
 Hooks.on("drawPrimaryCanvasGroup", applyRoofLevels);
 Hooks.on("updateLevel", (level, changes) => {
