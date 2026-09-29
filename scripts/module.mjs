@@ -490,7 +490,9 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
       vec4 fow = mix(mix(unexplored, explored, max(r, v)), revealed, m);
       gl_FragColor = mix(fow, vec4(0.0), v);`}
 
-      gl_FragColor.rgb *= gl_FragColor.a;
+      // Our fog colours are opaque, so mixing towards transparent already yields premultiplied colour.
+      // Premultiplying again (as core does) darkens partially visible pixels into a seam along vision edges.
+      if ( !fsEnabled ) gl_FragColor.rgb *= gl_FragColor.a;
     }`;
   }
 
