@@ -49,6 +49,12 @@
       "None": "Off",
       "Fade": "Whole level: fades entirely while a token is under it",
       "Vision": "Vision: see-through only where your tokens can see"
+    },
+    "HideRoofs": {
+      "Name": "Hide Roofs (GM)",
+      "Hint": "Toggle all roofs (roof tiles and Roof Levels) hidden on your screen until toggled again, to see and edit what's beneath. GM only; players are unaffected.",
+      "On": "Roofs hidden",
+      "Off": "Roofs shown"
     }
   }
 }

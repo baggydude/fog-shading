@@ -317,7 +317,7 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
    */
   static #isFadedRoof(mesh) {
     if ( !(mesh.occlusionMode & RevealMask.#ROOF_MODES) ) return false;
-    if ( mesh.occluded ) return true;
+    if ( mesh.occluded || !mesh.renderable ) return true;   // Not renderable: hidden by the GM Hide Roofs toggle
     return !canvas.masks.occlusion.vision && (mesh._hoverFadeState?.occlusion > 0);
   }
 }
@@ -388,6 +388,89 @@ function injectLevelConfig(app, element) {
     {label: loc("FOGSHADING.RoofLevel.Name"), hint: loc("FOGSHADING.RoofLevel.Hint")},
     {name, value: getRoofStyle(app.document)}
   ));
+}
+
+/* -------------------------------------------- */
+/*  GM Hide Roofs                               */
+/* -------------------------------------------- */
+
+/**
+ * Occlusion modes that make a mesh a roof (tiles and roof Levels).
+ */
+const ROOF_OCCLUSION_MODES = CONST.OCCLUSION_MODES.FADE | CONST.OCCLUSION_MODES.RADIAL | CONST.OCCLUSION_MODES.VISION;
+
+/**
+ * Whether the GM has toggled all roofs hidden. Per-client and not saved; resets on reload.
+ * @type {boolean}
+ */
+let roofsHidden = false;
+
+/**
+ * Meshes this module has made non-renderable, so they can be restored.
+ * @type {Set<PrimarySpriteMesh>}
+ */
+const hiddenRoofMeshes = new Set();
+
+/**
+ * Every roof mesh on the canvas: tiles with a roof occlusion mode and roof Level backgrounds.
+ * @yields {PrimarySpriteMesh}
+ */
+function* allRoofMeshes() {
+  for ( const tile of canvas.tiles?.placeables ?? [] ) {
+    if ( tile.mesh && (tile.mesh.occlusionMode & ROOF_OCCLUSION_MODES) ) yield tile.mesh;
+  }
+  for ( const mesh of canvas.primary?.levelTextures ?? [] ) {
+    if ( mesh[ROOF_LEVEL_KEY] ) yield mesh;
+  }
+}
+
+/**
+ * Keep roofs hidden while toggled. Runs every frame because tiles and Level textures are recreated on redraw.
+ */
+function enforceHiddenRoofs() {
+  if ( !roofsHidden || !canvas.ready ) return;
+  for ( const mesh of allRoofMeshes() ) {
+    if ( !mesh.renderable ) continue;
+    mesh.renderable = false;
+    hiddenRoofMeshes.add(mesh);
+  }
+}
+
+/**
+ * Toggle all roofs hidden for this GM client.
+ * @param {boolean} [hidden]  Explicit state; toggles if omitted
+ */
+function setRoofsHidden(hidden = !roofsHidden) {
+  if ( !game.user.isGM || (hidden === roofsHidden) ) return;
+  roofsHidden = hidden;
+  if ( !hidden ) {
+    for ( const mesh of hiddenRoofMeshes ) if ( !mesh.destroyed ) mesh.renderable = true;
+    hiddenRoofMeshes.clear();
+  }
+  else enforceHiddenRoofs();
+  ui.notifications.info(game.i18n.localize(hidden ? "FOGSHADING.HideRoofs.On" : "FOGSHADING.HideRoofs.Off"));
+  ui.controls?.render();
+}
+
+/**
+ * Add a Hide Roofs toggle to the Token and Tile scene controls for the GM.
+ * @param {Record<string, SceneControl>} controls
+ */
+function addHideRoofsControl(controls) {
+  if ( !game.user.isGM ) return;
+  for ( const name of ["tokens", "tiles"] ) {
+    const control = controls[name];
+    if ( !control?.tools ) continue;
+    control.tools.fogShadingHideRoofs = {
+      name: "fogShadingHideRoofs",
+      order: 100,
+      title: "FOGSHADING.HideRoofs.Name",
+      icon: "fa-solid fa-house-chimney-crack",
+      toggle: true,
+      active: roofsHidden,
+      onChange: (event, toggled) => setRoofsHidden(toggled)
+    };
+  }
 }
 
 /* -------------------------------------------- */
@@ -525,6 +608,16 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
 Hooks.once("init", () => {
   registerSettings();
   CONFIG.Canvas.visibilityFilter = ShadedVisibilityFilter;
+  game.keybindings.register(MODULE_ID, "hideRoofs", {
+    name: "FOGSHADING.HideRoofs.Name",
+    hint: "FOGSHADING.HideRoofs.Hint",
+    editable: [{key: "KeyR", modifiers: ["Alt"]}],
+    restricted: true,
+    onDown: () => {
+      setRoofsHidden();
+      return true;
+    }
+  });
 });
 
 Hooks.once("setup", refreshState);
@@ -538,6 +631,13 @@ Hooks.on("updateScene", (scene, changes) => {
 });
 Hooks.on("renderSceneConfig", injectSceneConfig);
 Hooks.on("renderSettingsConfig", onRenderSettingsConfig);
+Hooks.on("getSceneControlButtons", addHideRoofsControl);
+Hooks.on("canvasReady", () => {
+  hiddenRoofMeshes.clear();
+  // The app (and its ticker) persists across scene changes; don't stack listeners
+  canvas.app.ticker.remove(enforceHiddenRoofs);
+  canvas.app.ticker.add(enforceHiddenRoofs);
+});
 Hooks.on("renderLevelConfig", injectLevelConfig);
 Hooks.on("drawPrimaryCanvasGroup", applyRoofLevels);
 Hooks.on("updateLevel", (level, changes) => {
