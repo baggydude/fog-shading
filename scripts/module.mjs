@@ -449,7 +449,7 @@ function setRoofsHidden(hidden = !roofsHidden) {
   }
   else enforceHiddenRoofs();
   ui.notifications.info(game.i18n.localize(hidden ? "FOGSHADING.HideRoofs.On" : "FOGSHADING.HideRoofs.Off"));
-  ui.controls?.render();
+  ui.controls?.render({reset: true});   // Reset re-runs getSceneControlButtons so the button reflects the state
 }
 
 /**
