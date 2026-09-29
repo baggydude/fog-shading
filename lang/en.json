@@ -50,6 +50,25 @@
     "UseFogImage": {
       "Name": "Prefer Fog Images When Set",
       "Hint": "If a Scene or Level has a Fog of War image configured, use it for unexplored areas instead of the shaded map."
+    },
+    "NeverFog": {
+      "Name": "Never Fog Outside Buildings",
+      "Hint": "While at least one of your tokens is outside, the map outside buildings is always shown and only buildings with a faded roof get fog. While all your tokens are inside, everything uses normal fog. Tokens always need line of sight, and fog memory is unaffected. A building is a roof tile (Fade, Radial or Vision occlusion) or a Roof Level."
+    },
+    "RevealedDarkness": {
+      "Name": "Never Fog: Darkness",
+      "Hint": "How dark always-shown areas are when outside your line of sight. 0 = full map brightness."
+    },
+    "RevealedSaturation": {
+      "Name": "Never Fog: Saturation",
+      "Hint": "Colour saturation of always-shown areas outside your line of sight. 0 = greyscale, 1 = original colours."
+    },
+    "RoofLevel": {
+      "Name": "Roof Level (Fog Shading)",
+      "Hint": "Treat this Level's background as a roof. Its opaque pixels (see Alpha Threshold) are the roof. With Never Fog enabled, the area under a faded roof gets normal fog. Use roof tiles for separate buildings.",
+      "None": "Off",
+      "Fade": "Whole level: fades entirely while a token is under it",
+      "Vision": "Vision: see-through only where your tokens can see"
     }
   }
 }

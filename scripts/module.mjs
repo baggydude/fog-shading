@@ -15,7 +15,10 @@ const state = {
   exploredTint: [0, 0, 0],
   exploredTintStrength: 0.0,
   sceneDarknessInfluence: 0.5,
-  useFogImage: false
+  useFogImage: false,
+  neverFog: false,
+  revealedDarkness: 0.2,
+  revealedSaturation: 0.85
 };
 
 /* -------------------------------------------- */
@@ -38,7 +41,10 @@ const SETTINGS = {
   exploredTint: {key: "ExploredTint", type: () => color("#1a2233"), isColor: true},
   exploredTintStrength: {key: "ExploredTintStrength", type: () => slider(0.0)},
   sceneDarknessInfluence: {key: "SceneDarknessInfluence", type: () => slider(0.5)},
-  useFogImage: {key: "UseFogImage", type: () => new BooleanField({initial: false})}
+  useFogImage: {key: "UseFogImage", type: () => new BooleanField({initial: false})},
+  neverFog: {key: "NeverFog", type: () => new BooleanField({initial: false})},
+  revealedDarkness: {key: "RevealedDarkness", type: () => slider(0.2)},
+  revealedSaturation: {key: "RevealedSaturation", type: () => slider(0.85)}
 };
 
 function registerSettings() {
@@ -149,6 +155,231 @@ function readValues(fieldset) {
 }
 
 /* -------------------------------------------- */
+/*  Reveal Mask                                 */
+/* -------------------------------------------- */
+
+/**
+ * Screen-space mask (red channel) of areas that are never drawn as fog. Lives in the hidden canvas group
+ * alongside core's vision/occlusion masks so it renders before the visibility filter samples it.
+ *
+ * The whole scene is revealed, minus every roof tile that core currently has faded. A roof is any tile with a
+ * Fade, Radial or Vision occlusion mode; its cut-out is the tile's own image (alpha), drawn with the tile's
+ * transform. Because this keys off the same flag that fades the roof, fog returns beneath a roof at exactly the
+ * moment the roof disappears.
+ */
+class RevealMask extends foundry.canvas.containers.CachedContainer {
+  constructor() {
+    super();
+    this.background = this.addChild(new PIXI.LegacyGraphics());
+    this.roofs = this.addChild(new PIXI.Container());
+  }
+
+  /** @override */
+  static textureConfiguration = {
+    scaleMode: PIXI.SCALE_MODES.LINEAR,
+    format: PIXI.FORMATS.RGBA,
+    multisample: PIXI.MSAA_QUALITY.NONE
+  };
+
+  /** Occlusion modes that make a tile a roof. */
+  static #ROOF_MODES = CONST.OCCLUSION_MODES.FADE | CONST.OCCLUSION_MODES.RADIAL | CONST.OCCLUSION_MODES.VISION;
+
+  /** @override */
+  clearColor = [0, 0, 0, 0];
+
+  /**
+   * The scene rect the background was drawn for.
+   * @type {PIXI.Rectangle|null}
+   */
+  #sceneRect = null;
+
+  /** @override */
+  clear() {
+    this.background.clear();
+    this.#sceneRect = null;
+    for ( const sprite of this.roofs.children ) {
+      sprite.texture = PIXI.Texture.EMPTY;
+      sprite.visible = false;
+    }
+    return this;
+  }
+
+  /**
+   * Set after an error so a broken mask disables itself instead of halting the canvas render loop.
+   * @type {boolean}
+   */
+  #failed = false;
+
+  /** @override */
+  render(renderer) {
+    this.renderable = !this.#failed && state.enabled && state.neverFog && !!canvas.scene;
+    if ( !this.renderable ) return;
+    try {
+      // With all your tokens inside, the outside follows normal fog too
+      if ( !RevealMask.#anyViewerOutside() ) {
+        this.renderable = false;
+        return;
+      }
+      this.#refreshBackground();
+      this.#refreshRoofs();
+    } catch(err) {
+      this.#failed = true;
+      this.renderable = false;
+      console.error(`${MODULE_ID} | Never Fog mask failed and has been disabled until reload`, err);
+      ui.notifications?.error("Fog Shading: Never Fog failed and was disabled. See console (F12) for details.");
+      return;
+    }
+    super.render(renderer);
+  }
+
+  /**
+   * Fill the scene rect: everything is revealed unless a faded roof says otherwise.
+   */
+  #refreshBackground() {
+    const rect = canvas.dimensions.sceneRect;
+    const r = this.#sceneRect;
+    if ( r && (r.x === rect.x) && (r.y === rect.y) && (r.width === rect.width) && (r.height === rect.height) ) return;
+    this.#sceneRect = rect.clone();
+    this.background.clear().beginFill(0xFFFFFF, 1).drawShape(rect).endFill();
+  }
+
+  /**
+   * Draw each currently faded roof tile's image in black, restoring normal fog beneath it.
+   */
+  #refreshRoofs() {
+    const sprites = this.roofs.children;
+    const toLocal = this.worldTransform.clone().invert();
+    let i = 0;
+    for ( const mesh of RevealMask.#roofMeshes() ) {
+      if ( !mesh.visible || !RevealMask.#isFadedRoof(mesh) ) continue;
+      const sprite = sprites[i++] ?? this.roofs.addChild(new PIXI.Sprite());
+      sprite.texture = mesh.texture;
+      sprite.anchor.copyFrom(mesh.anchor);
+      sprite.tint = 0x000000;
+      sprite.transform.setFromMatrix(toLocal.clone().append(mesh.worldTransform));
+      sprite.visible = true;
+    }
+    for ( ; i < sprites.length; i++ ) sprites[i].visible = false;
+
+    // The stage's transform pass already ran this frame; recompute so sprites match the roofs now, not next frame
+    this.roofs.updateTransform();
+  }
+
+  /**
+   * Candidate roof meshes: visible tiles, plus the background of any Level flagged as a roof level.
+   * @yields {PrimarySpriteMesh}
+   */
+  static *#roofMeshes() {
+    for ( const tile of canvas.tiles.placeables ) {
+      if ( tile.mesh && tile.visible ) yield tile.mesh;
+    }
+    for ( const mesh of canvas.primary.levelTextures ) {
+      if ( mesh[ROOF_LEVEL_KEY] ) yield mesh;
+    }
+  }
+
+  /**
+   * Is at least one token you're seeing through outside, i.e. not under any roof? Uses core's own roof test
+   * (testOcclusion: below the roof and under its opaque pixels). With no vision tokens, counts as outside.
+   * @returns {boolean}
+   */
+  static #anyViewerOutside() {
+    const viewers = [];
+    for ( const source of canvas.effects.visionSources ) {
+      const token = source.object;
+      if ( source.active && (token instanceof foundry.canvas.placeables.Token) ) viewers.push(token);
+    }
+    if ( !viewers.length ) return true;
+    const roofs = [];
+    for ( const mesh of RevealMask.#roofMeshes() ) {
+      if ( mesh.visible && (mesh.occlusionMode & RevealMask.#ROOF_MODES) ) roofs.push(mesh);
+    }
+    return viewers.some(token => !roofs.some(mesh => mesh.testOcclusion(token)));
+  }
+
+  /**
+   * Is this mesh a roof that core currently has faded?
+   * Hover-fade only counts when no vision occlusion is active; with vision active core limits hover-fade to what
+   * your tokens can already see.
+   * @param {PrimarySpriteMesh} mesh
+   * @returns {boolean}
+   */
+  static #isFadedRoof(mesh) {
+    if ( !(mesh.occlusionMode & RevealMask.#ROOF_MODES) ) return false;
+    if ( mesh.occluded ) return true;
+    return !canvas.masks.occlusion.vision && (mesh._hoverFadeState?.occlusion > 0);
+  }
+}
+
+/* -------------------------------------------- */
+/*  Roof Levels                                 */
+/* -------------------------------------------- */
+
+/** Property set on a Level background mesh that acts as a roof. */
+const ROOF_LEVEL_KEY = `${MODULE_ID}.roof`;
+
+/**
+ * Roof level fade styles, stored in the Level's flags.fog-shading.roof.
+ * - none: not a roof
+ * - fade: the whole image fades while a token is under any of its opaque pixels (like a Fade roof tile)
+ * - vision: the image becomes see-through only where your tokens can see (like a Vision roof tile)
+ */
+const ROOF_STYLES = {
+  none: "FOGSHADING.RoofLevel.None",
+  fade: "FOGSHADING.RoofLevel.Fade",
+  vision: "FOGSHADING.RoofLevel.Vision"
+};
+
+/**
+ * The roof style of a Level. Earlier versions stored a boolean, which meant "fade".
+ * @param {Level} level
+ * @returns {"none"|"fade"|"vision"}
+ */
+function getRoofStyle(level) {
+  const value = level.flags[MODULE_ID]?.roof;
+  if ( value === true ) return "fade";
+  return value in ROOF_STYLES ? value : "none";
+}
+
+/**
+ * Give the background of every roof Level core's Fade or Vision occlusion, exactly like a roof tile. Core draws
+ * Level textures with Surface occlusion only; the roof mode is added on top so region-based surfaces keep working.
+ */
+function applyRoofLevels() {
+  if ( !canvas.scene || !canvas.primary?.levelTextures ) return;
+  const M = CONST.OCCLUSION_MODES;
+  const modes = {none: 0, fade: M.FADE, vision: M.VISION};
+  for ( const level of canvas.scene.levels ) {
+    const mesh = canvas.primary.levelTextures.find(m => m.name === `Level.${level.index}.background`);
+    if ( !mesh ) continue;
+    const style = getRoofStyle(level);
+    mesh.occlusionMode = M.SURFACE | modes[style];
+    mesh[ROOF_LEVEL_KEY] = style !== "none";
+    // Core creates Level textures with hover-fade off; let the GM hover a roof level to see and edit beneath it
+    mesh.hoverFade = (style !== "none") && game.user.isGM;
+  }
+  canvas.perception.update({refreshOcclusion: true});
+}
+
+/**
+ * Add a "Roof Level" select to the Background section of the Level config sheet.
+ */
+function injectLevelConfig(app, element) {
+  if ( !game.user.isGM ) return;
+  const name = `flags.${MODULE_ID}.roof`;
+  if ( element.querySelector(`[name="${name}"]`) ) return;
+  const bgFieldset = element.querySelector('[name="background.src"]')?.closest("fieldset");
+  if ( !bgFieldset ) return;
+  const loc = key => game.i18n.localize(key);
+  const choices = Object.fromEntries(Object.entries(ROOF_STYLES).map(([k, v]) => [k, loc(v)]));
+  const field = new foundry.data.fields.StringField({required: true, blank: false, initial: "none", choices});
+  bgFieldset.append(field.toFormGroup(
+    {label: loc("FOGSHADING.RoofLevel.Name"), hint: loc("FOGSHADING.RoofLevel.Hint")},
+    {name, value: getRoofStyle(app.document)}
+  ));
+}
+
+/* -------------------------------------------- */
 /*  Visibility Filter                           */
 /* -------------------------------------------- */
 
@@ -173,7 +404,10 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
       fsUnexplored: [0.85, 0, 0],         // darkness, saturation, tint strength
       fsUnexploredTint: [0, 0, 0],
       fsExplored: [0.55, 0.35, 0],
-      fsExploredTint: [0, 0, 0]
+      fsExploredTint: [0, 0, 0],
+      fsReveal: false,
+      fsRevealed: [0.2, 0.85, 0],
+      fsRevealTexture: PIXI.Texture.WHITE
     };
   }
 
@@ -201,6 +435,9 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
     uniform vec3 fsUnexploredTint;
     uniform vec3 fsExplored;
     uniform vec3 fsExploredTint;
+    uniform bool fsReveal;
+    uniform vec3 fsRevealed;
+    uniform sampler2D fsRevealTexture;
 
     ${this.CONSTANTS}
     ${this.PERCEIVED_BRIGHTNESS}
@@ -236,8 +473,12 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
       else if ( fsEnabled ) unexplored = vec4(grade(baseColor.rgb, fsUnexplored, fsUnexploredTint), 1.0);
       else unexplored = vec4(unexploredColor, 1.0);
 
+      // Never-fogged areas (roofs / outdoors) are drawn with the "revealed" grade instead of fog
+      float m = fsReveal ? texture2D(fsRevealTexture, vMaskTextureCoord).r : 0.0;
+      vec4 revealed = vec4(grade(baseColor.rgb, fsRevealed, vec3(0.0)), 1.0);
+
       ${persistent ? `
-      gl_FragColor = mix(unexplored, vec4(0.0), r);` : `
+      gl_FragColor = mix(mix(unexplored, revealed, m), vec4(0.0), r);` : `
       // Explored but not currently visible
       vec4 explored;
       if ( fsEnabled ) explored = vec4(grade(baseColor.rgb, fsExplored, fsExploredTint), 1.0);
@@ -246,10 +487,12 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
         explored = vec4(min((exploredColor * reflec) + (baseColor.rgb * exploredColor), vec3(1.0)), 0.5);
       }
 
-      vec4 fow = mix(unexplored, explored, max(r, v));
+      vec4 fow = mix(mix(unexplored, explored, max(r, v)), revealed, m);
       gl_FragColor = mix(fow, vec4(0.0), v);`}
 
-      gl_FragColor.rgb *= gl_FragColor.a;
+      // Our fog colours are opaque, so mixing towards transparent already yields premultiplied colour.
+      // Premultiplying again (as core does) darkens partially visible pixels into a seam along vision edges.
+      if ( !fsEnabled ) gl_FragColor.rgb *= gl_FragColor.a;
     }`;
   }
 
@@ -268,6 +511,11 @@ class ShadedVisibilityFilter extends foundry.canvas.rendering.filters.Visibility
     u.fsExplored[2] = s.exploredTintStrength;
     u.fsUnexploredTint = s.unexploredTint;
     u.fsExploredTint = s.exploredTint;
+    const mask = canvas.masks.fogShadingReveal;
+    u.fsReveal = !!mask?.renderable;
+    u.fsRevealTexture = mask?.renderTexture ?? PIXI.Texture.WHITE;
+    u.fsRevealed[0] = s.revealedDarkness;
+    u.fsRevealed[1] = s.revealedSaturation;
     super.apply(filterManager, input, output, clear);
   }
 }
@@ -285,11 +533,17 @@ Hooks.once("setup", refreshState);
 Hooks.on("canvasInit", () => {
   preview = null;
   refreshState();
+  if ( !canvas.masks.fogShadingReveal ) canvas.hidden.addMask("fogShadingReveal", new RevealMask());
 });
 Hooks.on("updateScene", (scene, changes) => {
   if ( (scene.id === canvas.scene?.id) && foundry.utils.hasProperty(changes, `flags.${MODULE_ID}`) ) refreshState();
 });
 Hooks.on("renderSceneConfig", injectSceneConfig);
+Hooks.on("renderLevelConfig", injectLevelConfig);
+Hooks.on("drawPrimaryCanvasGroup", applyRoofLevels);
+Hooks.on("updateLevel", (level, changes) => {
+  if ( (level.parent === canvas.scene) && foundry.utils.hasProperty(changes, `flags.${MODULE_ID}`) ) applyRoofLevels();
+});
 Hooks.on("closeSceneConfig", () => {
   if ( preview === null ) return;
   preview = null;
