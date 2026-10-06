@@ -50,11 +50,9 @@
       "Fade": "Whole level: fades entirely while a token is under it",
       "Vision": "Vision: see-through only where your tokens can see"
     },
-    "LevelNeverFog": {
-      "Name": "Never Fog on This Level (Fog Shading)",
-      "Hint": "Off makes this Level always use normal fog, even with Never Fog: Outside enabled. Use it for basements, caves, sewers or any level that's indoors without a roof above it.",
-      "Auto": "Auto: outside unless under a roof",
-      "Off": "Off: always normal fog"
+    "DisableNeverFog": {
+      "Name": "Disable Never Fog (Fog Shading)",
+      "Hint": "This Level always uses normal fog, even with Never Fog: Outside enabled. Use it for basements, caves, sewers or any level that's indoors without a roof above it."
     },
     "HideRoofs": {
       "Name": "Hide Roofs (GM)",
