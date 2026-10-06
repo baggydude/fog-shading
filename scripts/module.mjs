@@ -223,7 +223,8 @@ class RevealMask extends foundry.canvas.containers.CachedContainer {
 
   /** @override */
   render(renderer) {
-    this.renderable = !this.#failed && state.enabled && state.neverFog && !!canvas.scene;
+    this.renderable = !this.#failed && state.enabled && state.neverFog && !!canvas.scene
+      && (getLevelNeverFog(canvas.level) !== "off");
     if ( !this.renderable ) return;
     try {
       // With all your tokens inside, the outside follows normal fog too
@@ -382,12 +383,34 @@ function injectLevelConfig(app, element) {
   const bgFieldset = element.querySelector('[name="background.src"]')?.closest("fieldset");
   if ( !bgFieldset ) return;
   const loc = key => game.i18n.localize(key);
-  const choices = Object.fromEntries(Object.entries(ROOF_STYLES).map(([k, v]) => [k, loc(v)]));
-  const field = new foundry.data.fields.StringField({required: true, blank: false, initial: "none", choices});
-  bgFieldset.append(field.toFormGroup(
+  const select = (styles, initial) => new foundry.data.fields.StringField({required: true, blank: false, initial,
+    choices: Object.fromEntries(Object.entries(styles).map(([k, v]) => [k, loc(v)]))});
+  bgFieldset.append(select(ROOF_STYLES, "none").toFormGroup(
     {label: loc("FOGSHADING.RoofLevel.Name"), hint: loc("FOGSHADING.RoofLevel.Hint")},
     {name, value: getRoofStyle(app.document)}
   ));
+  bgFieldset.append(select(LEVEL_NEVER_FOG, "auto").toFormGroup(
+    {label: loc("FOGSHADING.LevelNeverFog.Name"), hint: loc("FOGSHADING.LevelNeverFog.Hint")},
+    {name: `flags.${MODULE_ID}.neverFog`, value: getLevelNeverFog(app.document)}
+  ));
+}
+
+/**
+ * Per-Level Never Fog behaviour, stored in the Level's flags.fog-shading.neverFog.
+ * - auto: Never Fog applies as normal (outside unless your tokens are under a roof)
+ * - off: this Level always uses normal fog, e.g. basements, caves and sewers, which have no roof above them
+ */
+const LEVEL_NEVER_FOG = {
+  auto: "FOGSHADING.LevelNeverFog.Auto",
+  off: "FOGSHADING.LevelNeverFog.Off"
+};
+
+/**
+ * @param {Level} level
+ * @returns {"auto"|"off"}
+ */
+function getLevelNeverFog(level) {
+  return level?.flags[MODULE_ID]?.neverFog === "off" ? "off" : "auto";
 }
 
 /* -------------------------------------------- */
