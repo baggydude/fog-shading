@@ -378,21 +378,31 @@ function applyRoofLevels() {
  */
 function injectLevelConfig(app, element) {
   if ( !game.user.isGM ) return;
-  const name = `flags.${MODULE_ID}.roof`;
-  if ( element.querySelector(`[name="${name}"]`) ) return;
+  if ( element.querySelector("fieldset.fog-shading") ) return;
   const bgFieldset = element.querySelector('[name="background.src"]')?.closest("fieldset");
   if ( !bgFieldset ) return;
   const loc = key => game.i18n.localize(key);
+
+  const fieldset = document.createElement("fieldset");
+  fieldset.classList.add("fog-shading");
+  const legend = document.createElement("legend");
+  legend.textContent = loc("FOGSHADING.Scene.Legend");
+  fieldset.append(legend);
+
   const choices = Object.fromEntries(Object.entries(ROOF_STYLES).map(([k, v]) => [k, loc(v)]));
   const roofField = new foundry.data.fields.StringField({required: true, blank: false, initial: "none", choices});
-  bgFieldset.append(roofField.toFormGroup(
+  fieldset.append(roofField.toFormGroup(
     {label: loc("FOGSHADING.RoofLevel.Name"), hint: loc("FOGSHADING.RoofLevel.Hint")},
-    {name, value: getRoofStyle(app.document)}
+    {name: `flags.${MODULE_ID}.roof`, value: getRoofStyle(app.document)}
   ));
-  bgFieldset.append(new BooleanField().toFormGroup(
+  fieldset.append(new BooleanField().toFormGroup(
     {label: loc("FOGSHADING.DisableNeverFog.Name"), hint: loc("FOGSHADING.DisableNeverFog.Hint")},
     {name: `flags.${MODULE_ID}.disableNeverFog`, value: isNeverFogDisabled(app.document)}
   ));
+
+  // Own section directly after core's Fog of War section (or Background, if that's missing)
+  const fogFieldset = element.querySelector('[name="fog.src"]')?.closest("fieldset");
+  (fogFieldset ?? bgFieldset).after(fieldset);
 }
 
 /**

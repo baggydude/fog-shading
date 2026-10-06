@@ -44,14 +44,14 @@
       "Hint": "How much the scene's darkness level further darkens fogged areas, so night scenes don't show brighter fog than lit areas. 0 = ignore scene darkness."
     },
     "RoofLevel": {
-      "Name": "Roof Level (Fog Shading)",
+      "Name": "Roof Level",
       "Hint": "Treat this Level's background as a roof. Its opaque pixels (see Alpha Threshold) are the roof. With Never Fog enabled, the area under a faded roof gets normal fog. Use roof tiles for separate buildings.",
       "None": "Off",
       "Fade": "Whole level: fades entirely while a token is under it",
       "Vision": "Vision: see-through only where your tokens can see"
     },
     "DisableNeverFog": {
-      "Name": "Disable Never Fog (Fog Shading)",
+      "Name": "Disable Never Fog",
       "Hint": "This Level always uses normal fog, even with Never Fog: Outside enabled. Use it for basements, caves, sewers or any level that's indoors without a roof above it."
     },
     "HideRoofs": {
