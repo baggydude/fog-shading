@@ -13,7 +13,8 @@
     }
   ],
   "esmodules": [
-    "scripts/module.mjs"
+    "scripts/module.mjs",
+    "scripts/stuck-movement-fix.mjs"
   ],
   "languages": [
     {
